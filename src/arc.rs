@@ -4,7 +4,7 @@ use std::{
     path::Path,
 };
 
-use log::{debug, info};
+use log::info;
 
 use crate::error::{ArcError, ArcResult};
 
