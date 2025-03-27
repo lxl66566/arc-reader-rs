@@ -1,6 +1,8 @@
 # arc-reader-rs
 
-这是 [minirop/arc-reader](https://github.com/minirop/arc-reader) 的 Rust 实现，用于读取和提取 BGI 引擎（OverDrive/MangaGamer）的 .arc 文件。这个项目从 C 语言版本的 arc-reader 移植而来，它保持了原始项目的功能和结构，但利用了 Rust 的易于构建和静态链接的特性。
+这是 [minirop/arc-reader](https://github.com/minirop/arc-reader) 的 Rust 实现，用于读取和提取 BGI 引擎（OverDrive/MangaGamer）的 .arc 文件。这个项目从 C 语言版本的 arc-reader 移植而来，它尽可能保持了原始项目的功能和结构，但利用了 Rust 的易于构建和静态链接的特性。
+
+同时，我还为其添加了 .ogg 格式的解包支持。
 
 本项目的主要编写者为 claude-3.7，感谢其对本项目的大力支持。
 

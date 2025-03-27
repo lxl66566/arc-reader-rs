@@ -4,11 +4,13 @@ mod bse;
 mod cbg;
 mod decrypt;
 mod dsc;
+mod error;
 mod write;
 
 use clap::Parser;
+use log::{debug, error, info};
 use std::fs;
-use std::io::{self, Write};
+use std::io::Write;
 use std::path::Path;
 
 #[derive(Parser)]
@@ -23,16 +25,15 @@ struct Args {
     output_path: Option<String>,
 }
 
-fn main() {
-    let args = Args::parse();
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    _ = pretty_env_logger::formatted_builder()
+        .filter_level(log::LevelFilter::Debug)
+        .format_timestamp_secs()
+        .parse_default_env()
+        .try_init();
 
-    let arc = match arc::Arc::open(&args.arc_file) {
-        Some(a) => a,
-        None => {
-            println!("无法读取文件: {}", args.arc_file);
-            return;
-        }
-    };
+    let args = Args::parse();
+    let arc = arc::Arc::open(&args.arc_file)?;
 
     let count = arc.files_count();
 
@@ -43,39 +44,43 @@ fn main() {
         }
     }
 
-    println!("文件数量: {}", count);
+    info!("文件数量: {}", count);
 
     for i in 0..count {
+        let file_name = arc.get_file_name(i).map_err(|e| {
+            error!("无法获取文件名: {}", e);
+            e
+        })?;
+
         let file_name_with_path = if let Some(path) = args.output_path.as_ref() {
-            format!("{}/{}", path, arc.get_file_name(i))
+            format!("{}/{}", path, file_name)
         } else {
-            arc.get_file_name(i).to_string()
+            file_name.to_string()
         };
 
-        print!("{}...", arc.get_file_name(i));
-        io::stdout().flush().unwrap();
+        info!("extracting {}...", file_name);
 
-        let raw_data = match arc.get_file_data(i) {
-            Some(data) => data,
-            None => continue,
-        };
+        let raw_data = arc.get_file_data(i).map_err(|e| {
+            error!("无法读取文件数据: {}", e);
+            e
+        })?;
 
         let mut bse_data = raw_data.clone();
-        let filesize = arc.get_file_size(i);
+        let filesize = arc.get_file_size(i).map_err(|e| {
+            error!("无法获取文件大小: {}", e);
+            e
+        })?;
         let mut good = true;
 
         if bse::is_valid(&raw_data, filesize) {
-            print!("BSE...");
-            io::stdout().flush().unwrap();
+            debug!("BSE...");
             if bse::decrypt(&mut bse_data) {
                 bse_data = raw_data[16..].to_vec();
             }
         }
 
         if dsc::is_valid(&bse_data, filesize) {
-            print!("DSC...");
-            io::stdout().flush().unwrap();
-
+            debug!("DSC...");
             let result = dsc::decrypt(&bse_data, filesize);
             match result {
                 Some((decrypted, size)) => {
@@ -84,9 +89,7 @@ fn main() {
                 None => good = false,
             }
         } else if cbg::is_valid(&bse_data, filesize) {
-            print!("CBG...");
-            io::stdout().flush().unwrap();
-
+            debug!("CBG...");
             let result = cbg::decrypt(&bse_data);
             match result {
                 Some((decrypted, w, h)) => {
@@ -95,26 +98,22 @@ fn main() {
                 None => good = false,
             }
         } else {
-            print!("uncompressed...");
-            io::stdout().flush().unwrap();
+            debug!("uncompressed...");
+            let mut file = fs::File::create(&file_name_with_path).map_err(|e| {
+                error!("无法创建文件: {}", e);
+                e
+            })?;
 
-            let mut file = match fs::File::create(&file_name_with_path) {
-                Ok(f) => f,
-                Err(_) => {
-                    println!("ERROR: 无法创建文件");
-                    continue;
-                }
-            };
-            match file.write_all(&bse_data) {
-                Ok(_) => (),
-                Err(_) => good = false,
+            if let Err(e) = file.write_all(&bse_data) {
+                error!("无法写入文件: {}", e);
+                good = false;
             }
         }
 
-        if good {
-            println!("ok");
-        } else {
-            println!("ERROR");
+        if !good {
+            error!("ERROR");
         }
     }
+
+    Ok(())
 }
