@@ -1,0 +1,19 @@
+name: rust release action
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: release rust project
+        uses: lxl66566/rust-simple-release@v0.2.5
+        with:
+          targets: x86_64-pc-windows-msvc, x86_64-unknown-linux-musl, x86_64-apple-darwin
+          token: ${{ secrets.GH_TOKEN }}
