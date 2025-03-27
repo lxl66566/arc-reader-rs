@@ -205,55 +205,40 @@ fn dsc_is_image(data: &[u8]) -> bool {
 
 /// 保存 DSC 数据，如果是图像则保存为 PNG，否则保存为原始文件
 pub fn save(data: &[u8], size: u32, filename: &str) -> ArcResult<()> {
-    // 检查是否为图像
     if size > 15 && dsc_is_image(data) {
         let mut data_ptr = data;
         let width = read16(&mut data_ptr);
         let height = read16(&mut data_ptr);
         let bpp = read8(&mut data_ptr);
+        data_ptr = &data_ptr[11..]; // 跳过 11 个零字节
 
-        // 跳过 11 个零字节
-        data_ptr = &data_ptr[11..];
-
-        let mut pixels = vec![0u8; width as usize * height as usize * 4];
-        let mut pixels_ptr = 0;
-
-        for _ in 0..height {
-            for _ in 0..width {
-                let mut r = 0;
-                let mut g = 0;
-                let mut b = 0;
-                let mut a = 255;
-
-                if bpp == 8 {
-                    b = read8(&mut data_ptr);
-                    g = b;
-                    r = b;
-                } else {
-                    b = read8(&mut data_ptr);
-                    g = read8(&mut data_ptr);
-                    r = read8(&mut data_ptr);
-                    if bpp == 32 {
-                        a = read8(&mut data_ptr);
+        let pixels: Vec<u8> = (0..height as usize * width as usize)
+            .flat_map(|_| {
+                let (r, g, b, a) = match bpp {
+                    8 => {
+                        let v = read8(&mut data_ptr);
+                        (v, v, v, 255)
                     }
-                }
+                    32 => (
+                        read8(&mut data_ptr),
+                        read8(&mut data_ptr),
+                        read8(&mut data_ptr),
+                        read8(&mut data_ptr),
+                    ),
+                    _ => (
+                        read8(&mut data_ptr),
+                        read8(&mut data_ptr),
+                        read8(&mut data_ptr),
+                        255,
+                    ),
+                };
+                [r, g, b, a]
+            })
+            .collect();
 
-                pixels[pixels_ptr] = r;
-                pixels_ptr += 1;
-                pixels[pixels_ptr] = g;
-                pixels_ptr += 1;
-                pixels[pixels_ptr] = b;
-                pixels_ptr += 1;
-                pixels[pixels_ptr] = a;
-                pixels_ptr += 1;
-            }
-        }
-
-        let file_name = format!("{}.png", filename);
-        write_rgba_to_png(width, height, &pixels, &file_name)?;
+        write_rgba_to_png(width, height, &pixels, &format!("{}.png", filename))?;
     } else {
-        // 保存为原始文件
-        File::create(filename)?.write_all(&data[0..size as usize])?;
+        File::create(filename)?.write_all(&data[..size as usize])?;
     }
     Ok(())
 }

@@ -64,10 +64,7 @@ pub fn decrypt(crypted: &[u8]) -> ArcResult<(Vec<u8>, u16, u16)> {
 
     // 读取变量并建立表
     let mut ptr = &data0[..];
-    let mut table = [0u32; 256];
-    for n in 0..256 {
-        table[n] = read_variable(&mut ptr);
-    }
+    let table: [u32; 256] = std::array::from_fn(|_| read_variable(&mut ptr));
 
     // 执行方法2，构建解压表
     let mut table2 = vec![NodeCBG::new(); 511];
@@ -105,27 +102,18 @@ pub fn decrypt(crypted: &[u8]) -> ArcResult<(Vec<u8>, u16, u16)> {
     }
 
     // 解码数据3
-    let mut data3 = vec![0u8; (width as usize) * (height as usize) * 4];
+    let mut data3 = Vec::with_capacity(width as usize * height as usize * 4);
     let mut psrc = &data1[..];
-    let mut pdst_idx = 0;
-
     let mut type_flag = false;
+
     while !psrc.is_empty() {
         let len = read_variable(&mut psrc) as usize;
-
         if type_flag {
-            for _ in 0..len {
-                data3[pdst_idx] = 0;
-                pdst_idx += 1;
-            }
+            data3.resize(data3.len() + len, 0);
         } else {
-            for i in 0..len {
-                data3[pdst_idx] = psrc[i];
-                pdst_idx += 1;
-            }
+            data3.extend_from_slice(&psrc[..len]);
             psrc = &psrc[len..];
         }
-
         type_flag = !type_flag;
     }
 
@@ -158,36 +146,26 @@ pub fn decrypt(crypted: &[u8]) -> ArcResult<(Vec<u8>, u16, u16)> {
         }
     }
 
-    // 转换为 RGBA 像素数据
-    let mut pixels = vec![0u8; (width as usize) * (height as usize) * 4];
-    let mut pixels_ptr = 0;
-
-    for px in 0..(width as usize * height as usize) {
-        let (r, g, b, a) = if bpp == 32 {
-            (
-                ((data[px] >> 16) & 0xFF) as u8,
-                ((data[px] >> 8) & 0xFF) as u8,
-                (data[px] & 0xFF) as u8,
-                ((data[px] >> 24) & 0xFF) as u8,
-            )
-        } else {
-            (
-                (data[px] & 0xFF) as u8,
-                ((data[px] >> 8) & 0xFF) as u8,
-                ((data[px] >> 16) & 0xFF) as u8,
-                0xFF,
-            )
-        };
-
-        pixels[pixels_ptr] = r;
-        pixels_ptr += 1;
-        pixels[pixels_ptr] = g;
-        pixels_ptr += 1;
-        pixels[pixels_ptr] = b;
-        pixels_ptr += 1;
-        pixels[pixels_ptr] = a;
-        pixels_ptr += 1;
-    }
+    let pixels: Vec<u8> = (0..(width as usize * height as usize))
+        .flat_map(|px| {
+            let (r, g, b, a) = if bpp == 32 {
+                (
+                    ((data[px] >> 16) & 0xFF) as u8,
+                    ((data[px] >> 8) & 0xFF) as u8,
+                    (data[px] & 0xFF) as u8,
+                    ((data[px] >> 24) & 0xFF) as u8,
+                )
+            } else {
+                (
+                    (data[px] & 0xFF) as u8,
+                    ((data[px] >> 8) & 0xFF) as u8,
+                    ((data[px] >> 16) & 0xFF) as u8,
+                    0xFF,
+                )
+            };
+            [r, g, b, a]
+        })
+        .collect();
 
     Ok((pixels, width, height))
 }
@@ -203,10 +181,9 @@ pub fn save(data: &[u8], width: u16, height: u16, filename: &str) -> ArcResult<(
 fn read_variable(ptr: &mut &[u8]) -> u32 {
     let mut v = 0u32;
     let mut shift = 0i32;
-    let mut c;
 
     loop {
-        c = ptr[0];
+        let c = ptr[0];
         *ptr = &ptr[1..];
 
         v |= ((c & 0x7F) as u32) << shift;
