@@ -4,9 +4,15 @@ use std::{
     path::Path,
 };
 
-use log::debug;
+use log::{debug, info};
 
 use crate::error::{ArcError, ArcResult};
+
+// 定义版本特定的常量
+pub const V1_MAGIC: &[u8] = b"PackFile    ";
+pub const V2_MAGIC: &[u8] = b"BURIKO ARC20";
+pub const V1_METADATA_SIZE: u32 = 32; // 16 (name) + 4 (offset) + 4 (size) + 8 (padding)
+pub const V2_METADATA_SIZE: u32 = 112; // 16 (name) + 80 (20*4 padding) + 4 (offset) + 4 (size) + 24 (6*4 padding)
 
 /// 文件结构体，表示 ARC 归档中的单个文件
 #[derive(Debug, Clone)]
@@ -40,6 +46,7 @@ impl Arc {
         } else {
             return Err(ArcError::InvalidFormat);
         };
+        info!("ARC 版本: {}", version);
 
         // 读取文件数量
         let mut buffer = [0u8; 4];
@@ -58,11 +65,6 @@ impl Arc {
         }
 
         let data_position = file.stream_position()? as u32;
-
-        debug!(
-            "文件数量: {}, 版本: {}, 数据位置: {}",
-            number_of_files, version, data_position
-        );
 
         Ok(Arc {
             file,

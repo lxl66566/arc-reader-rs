@@ -8,11 +8,17 @@ use lewton::inside_ogg::OggStreamReader;
 
 use crate::error::ArcResult;
 
+/// 判断是否为 OGG 文件（带有 headers）
 pub fn is_valid(data: &[u8]) -> bool {
     if data.len() < 68 {
         return false;
     }
     &data[64..68] == b"OggS"
+}
+
+/// 判断是否为 OGG 文件（不带有 headers）
+pub fn is_ogg(data: &[u8]) -> bool {
+    &data[0..4] == b"OggS"
 }
 
 pub fn remove_header(data: Vec<u8>) -> Vec<u8> {
@@ -48,6 +54,7 @@ pub fn add_header(data: Vec<u8>) -> Vec<u8> {
 }
 
 pub fn save(data: &[u8], savepath: impl AsRef<Path>) -> ArcResult<()> {
+    let savepath = savepath.as_ref().with_extension("ogg");
     let mut file = File::create(savepath)?;
     file.write_all(data)?;
     Ok(())

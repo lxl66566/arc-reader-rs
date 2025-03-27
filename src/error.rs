@@ -27,6 +27,9 @@ pub enum ArcError {
 
     #[error("PNG文件处理失败")]
     PngProcessError,
+
+    #[error("暂不支持的文件类型: {0}")]
+    UnsupportedFileType(String),
 }
 
 pub type ArcResult<T> = Result<T, ArcError>;
