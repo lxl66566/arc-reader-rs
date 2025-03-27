@@ -14,6 +14,18 @@ pub enum ArcError {
 
     #[error("无效的文件名编码: {0}")]
     InvalidFileName(#[from] std::str::Utf8Error),
+
+    #[error("BSE解密失败")]
+    BseDecryptError,
+
+    #[error("DSC解密失败")]
+    DscDecryptError,
+
+    #[error("CBG解密失败")]
+    CbgDecryptError,
+
+    #[error("PNG文件处理失败")]
+    PngProcessError,
 }
 
 pub type ArcResult<T> = Result<T, ArcError>;

@@ -1,4 +1,5 @@
 use crate::decrypt::{hash_update, read8, read16, read32};
+use crate::error::ArcResult;
 use crate::write::write_rgba_to_png;
 use std::fs::File;
 use std::io::Write;
@@ -32,7 +33,7 @@ pub fn is_valid(data: &[u8], size: u32) -> bool {
 }
 
 /// 解密 DSC 文件，返回解密后的数据和大小
-pub fn decrypt(crypted: &[u8], crypted_size: u32) -> Option<(Vec<u8>, u32)> {
+pub fn decrypt(crypted: &[u8], crypted_size: u32) -> ArcResult<(Vec<u8>, u32)> {
     let mut data_ptr = &crypted[16..];
 
     let mut hash = read32(&mut data_ptr);
@@ -167,7 +168,7 @@ pub fn decrypt(crypted: &[u8], crypted_size: u32) -> Option<(Vec<u8>, u32)> {
         }
     }
 
-    Some((data, size))
+    Ok((data, size))
 }
 
 /// 检查数据是否是图像
@@ -203,7 +204,7 @@ fn dsc_is_image(data: &[u8]) -> bool {
 }
 
 /// 保存 DSC 数据，如果是图像则保存为 PNG，否则保存为原始文件
-pub fn save(data: &[u8], size: u32, filename: &str) -> bool {
+pub fn save(data: &[u8], size: u32, filename: &str) -> ArcResult<()> {
     // 检查是否为图像
     if size > 15 && dsc_is_image(data) {
         let mut data_ptr = data;
@@ -249,12 +250,10 @@ pub fn save(data: &[u8], size: u32, filename: &str) -> bool {
         }
 
         let file_name = format!("{}.png", filename);
-        write_rgba_to_png(width, height, &pixels, &file_name)
+        write_rgba_to_png(width, height, &pixels, &file_name)?;
     } else {
         // 保存为原始文件
-        match File::create(filename) {
-            Ok(mut file) => file.write_all(&data[0..size as usize]).is_ok(),
-            Err(_) => false,
-        }
+        File::create(filename)?.write_all(&data[0..size as usize])?;
     }
+    Ok(())
 }

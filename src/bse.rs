@@ -1,4 +1,5 @@
 use crate::decrypt::{read8, read16, read32};
+use crate::error::{ArcError, ArcResult};
 
 /// 检查数据是否是有效的 BSE 1.0 文件
 pub fn is_valid(data: &[u8], size: u32) -> bool {
@@ -11,7 +12,11 @@ pub fn is_valid(data: &[u8], size: u32) -> bool {
 }
 
 /// 解密 BSE 文件（仅前 64 字节加密）
-pub fn decrypt(crypted: &mut [u8]) -> bool {
+pub fn decrypt(data: &mut [u8]) -> ArcResult<()> {
+    if data.len() < 16 {
+        return Err(ArcError::BseDecryptError);
+    }
+
     let mut _hash: i32 = 0;
     let mut _sum_check: u8 = 0;
     let mut _xor_check: u8 = 0;
@@ -19,13 +24,13 @@ pub fn decrypt(crypted: &mut [u8]) -> bool {
     let mut xor_data: u8 = 0;
     let mut flags = [0; 64];
 
-    let mut data = &crypted[8..];
+    let mut data_mut = &data[8..];
 
     // 读取 0x100
-    let _ = read16(&mut data);
-    _sum_check = read8(&mut data);
-    _xor_check = read8(&mut data);
-    _hash = read32(&mut data) as i32;
+    let _ = read16(&mut data_mut);
+    _sum_check = read8(&mut data_mut);
+    _xor_check = read8(&mut data_mut);
+    _hash = read32(&mut data_mut) as i32;
 
     for _ in 0..64 {
         let mut _target = 0;
@@ -42,12 +47,12 @@ pub fn decrypt(crypted: &mut [u8]) -> bool {
 
         let k = bse_rand(&mut _hash);
         r = bse_rand(&mut _hash);
-        r = ((crypted[_target + 16] as i32 & 255) - r) & 255;
+        r = ((data[_target + 16] as i32 & 255) - r) & 255;
 
         if (k & 1) != 0 {
-            crypted[_target + 16] = ((r << s) | (r >> (8 - s))) as u8;
+            data[_target + 16] = ((r << s) | (r >> (8 - s))) as u8;
         } else {
-            crypted[_target + 16] = ((r >> s) | (r << (8 - s))) as u8;
+            data[_target + 16] = ((r >> s) | (r << (8 - s))) as u8;
         }
 
         flags[i as usize] = 1;
@@ -55,11 +60,15 @@ pub fn decrypt(crypted: &mut [u8]) -> bool {
 
     // 计算校验和
     for counter in 0..64 {
-        sum_data = sum_data.wrapping_add(crypted[counter + 16]);
-        xor_data ^= crypted[counter + 16];
+        sum_data = sum_data.wrapping_add(data[counter + 16]);
+        xor_data ^= data[counter + 16];
     }
 
-    sum_data == _sum_check && xor_data == _xor_check
+    if sum_data == _sum_check && xor_data == _xor_check {
+        Ok(())
+    } else {
+        Err(ArcError::BseDecryptError)
+    }
 }
 
 /// BSE 随机数生成器

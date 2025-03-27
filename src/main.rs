@@ -8,6 +8,7 @@ mod error;
 mod write;
 
 use clap::Parser;
+use error::ArcResult;
 use log::{debug, error, info};
 use std::fs;
 use std::io::Write;
@@ -23,6 +24,33 @@ struct Args {
     /// 输出目录路径（可选）
     #[arg(required = false)]
     output_path: Option<String>,
+}
+
+fn process_file(data: &[u8], filesize: u32, filename: &str) -> ArcResult<()> {
+    let mut bse_data = data.to_vec();
+
+    if bse::is_valid(data, filesize) {
+        debug!("BSE...");
+        bse::decrypt(&mut bse_data)?;
+        bse_data = data[16..].to_vec();
+    }
+
+    if dsc::is_valid(&bse_data, filesize) {
+        debug!("DSC...");
+        let (decrypted, size) = dsc::decrypt(&bse_data, filesize)?;
+        dsc::save(&decrypted, size, filename)?;
+    } else if cbg::is_valid(&bse_data, filesize) {
+        debug!("CBG...");
+        let (decrypted, w, h) = cbg::decrypt(&bse_data)?;
+        cbg::save(&decrypted, w, h, filename)?;
+    } else {
+        debug!("uncompressed...");
+        let mut file = fs::File::create(filename)?;
+
+        file.write_all(&bse_data)?;
+    }
+
+    Ok(())
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -65,53 +93,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             e
         })?;
 
-        let mut bse_data = raw_data.clone();
         let filesize = arc.get_file_size(i).map_err(|e| {
             error!("无法获取文件大小: {}", e);
             e
         })?;
-        let mut good = true;
 
-        if bse::is_valid(&raw_data, filesize) {
-            debug!("BSE...");
-            if bse::decrypt(&mut bse_data) {
-                bse_data = raw_data[16..].to_vec();
-            }
-        }
-
-        if dsc::is_valid(&bse_data, filesize) {
-            debug!("DSC...");
-            let result = dsc::decrypt(&bse_data, filesize);
-            match result {
-                Some((decrypted, size)) => {
-                    good = dsc::save(&decrypted, size, &file_name_with_path);
-                }
-                None => good = false,
-            }
-        } else if cbg::is_valid(&bse_data, filesize) {
-            debug!("CBG...");
-            let result = cbg::decrypt(&bse_data);
-            match result {
-                Some((decrypted, w, h)) => {
-                    good = cbg::save(&decrypted, w, h, &file_name_with_path);
-                }
-                None => good = false,
-            }
-        } else {
-            debug!("uncompressed...");
-            let mut file = fs::File::create(&file_name_with_path).map_err(|e| {
-                error!("无法创建文件: {}", e);
-                e
-            })?;
-
-            if let Err(e) = file.write_all(&bse_data) {
-                error!("无法写入文件: {}", e);
-                good = false;
-            }
-        }
-
-        if !good {
-            error!("ERROR");
+        if let Err(e) = process_file(&raw_data, filesize, &file_name_with_path) {
+            error!("处理文件失败: {}", e);
         }
     }
 

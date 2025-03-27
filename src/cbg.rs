@@ -1,4 +1,5 @@
-use crate::decrypt::{hash_update, read16, read32, read8};
+use crate::decrypt::{hash_update, read8, read16, read32};
+use crate::error::{ArcError, ArcResult};
 use crate::write::write_rgba_to_png;
 
 /// CBG 节点结构体
@@ -24,7 +25,7 @@ pub fn is_valid(data: &[u8], size: u32) -> bool {
 }
 
 /// 解密 CBG 文件，返回解密后的数据以及宽度和高度
-pub fn decrypt(crypted: &[u8]) -> Option<(Vec<u8>, u16, u16)> {
+pub fn decrypt(crypted: &[u8]) -> ArcResult<(Vec<u8>, u16, u16)> {
     let mut data_ptr = &crypted[16..];
 
     let width = read16(&mut data_ptr);
@@ -58,7 +59,7 @@ pub fn decrypt(crypted: &[u8]) -> Option<(Vec<u8>, u16, u16)> {
     }
 
     if sum_data != sum_check || xor_data != xor_check {
-        return None;
+        return Err(ArcError::CbgDecryptError);
     }
 
     // 读取变量并建立表
@@ -188,13 +189,14 @@ pub fn decrypt(crypted: &[u8]) -> Option<(Vec<u8>, u16, u16)> {
         pixels_ptr += 1;
     }
 
-    Some((pixels, width, height))
+    Ok((pixels, width, height))
 }
 
 /// 将 CBG 数据保存为 PNG 文件
-pub fn save(data: &[u8], width: u16, height: u16, filename: &str) -> bool {
+pub fn save(data: &[u8], width: u16, height: u16, filename: &str) -> ArcResult<()> {
     let file_name = format!("{}.png", filename);
-    write_rgba_to_png(width, height, data, &file_name)
+    write_rgba_to_png(width, height, data, &file_name)?;
+    Ok(())
 }
 
 // 辅助函数：读取可变长度整数
