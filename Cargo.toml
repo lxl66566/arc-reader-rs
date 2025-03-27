@@ -1,12 +1,18 @@
 [package]
-name = "arc-reader-rs"
-version = "0.1.0"
 edition = "2024"
+name    = "arc-reader-rs"
+version = "0.1.0"
 
 [dependencies]
-png = "0.17"
 clap = { version = "4.4", features = ["derive"] }
+png  = "0.17"
 
 [[bin]]
 name = "arc-reader"
 path = "src/main.rs"
+
+[profile.release]
+lto       = true
+opt-level = "z"
+panic     = "abort"
+strip     = true
