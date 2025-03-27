@@ -1,9 +1,12 @@
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
-use std::path::Path;
+use std::{
+    fs::File,
+    io::{Read, Seek, SeekFrom},
+    path::Path,
+};
+
+use log::debug;
 
 use crate::error::{ArcError, ArcResult};
-use log::debug;
 
 /// 文件结构体，表示 ARC 归档中的单个文件
 #[derive(Debug, Clone)]

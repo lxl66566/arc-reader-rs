@@ -4,11 +4,12 @@ name    = "arc-reader-rs"
 version = "0.1.0"
 
 [dependencies]
-clap      = { version = "4.4", features = ["derive"] }
-log       = "0.4.27"
-png       = "0.17"
+clap              = { version = "4.4", features = ["derive"] }
+lewton            = "0.10.2"
+log               = "0.4.27"
+png               = "0.17"
 pretty_env_logger = "0.5.0"
-thiserror = "2.0"
+thiserror         = "2.0"
 
 [[bin]]
 name = "arc-reader"

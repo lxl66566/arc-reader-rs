@@ -1,8 +1,10 @@
-use crate::decrypt::{hash_update, read8, read16, read32};
-use crate::error::ArcResult;
-use crate::write::write_rgba_to_png;
-use std::fs::File;
-use std::io::Write;
+use std::{fs::File, io::Write, path::Path};
+
+use crate::{
+    decrypt::{hash_update, read8, read16, read32},
+    error::ArcResult,
+    write::write_rgba_to_png,
+};
 
 /// DSC 节点结构体
 #[derive(Debug, Clone)]
@@ -204,7 +206,7 @@ fn dsc_is_image(data: &[u8]) -> bool {
 }
 
 /// 保存 DSC 数据，如果是图像则保存为 PNG，否则保存为原始文件
-pub fn save(data: &[u8], size: u32, filename: &str) -> ArcResult<()> {
+pub fn save(data: &[u8], size: u32, savepath: impl AsRef<Path>) -> ArcResult<()> {
     if size > 15 && dsc_is_image(data) {
         let mut data_ptr = data;
         let width = read16(&mut data_ptr);
@@ -236,9 +238,14 @@ pub fn save(data: &[u8], size: u32, filename: &str) -> ArcResult<()> {
             })
             .collect();
 
-        write_rgba_to_png(width, height, &pixels, &format!("{}.png", filename))?;
+        write_rgba_to_png(
+            width,
+            height,
+            &pixels,
+            savepath.as_ref().with_extension("png"),
+        )?;
     } else {
-        File::create(filename)?.write_all(&data[..size as usize])?;
+        File::create(savepath)?.write_all(&data[..size as usize])?;
     }
     Ok(())
 }

@@ -1,5 +1,7 @@
-use crate::decrypt::{read8, read16, read32};
-use crate::error::{ArcError, ArcResult};
+use crate::{
+    decrypt::{read8, read16, read32},
+    error::{ArcError, ArcResult},
+};
 
 /// 检查数据是否是有效的 BSE 1.0 文件
 pub fn is_valid(data: &[u8], size: u32) -> bool {

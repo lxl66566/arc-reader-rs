@@ -1,13 +1,15 @@
-use std::fs::File;
-use std::io::BufWriter;
-use std::path::Path;
+use std::{fs::File, io::BufWriter, path::Path};
 
 use crate::error::{ArcError, ArcResult};
 
 /// 将 RGBA 数据保存为 PNG 文件
-pub fn write_rgba_to_png(width: u16, height: u16, array: &[u8], filename: &str) -> ArcResult<()> {
-    let path = Path::new(filename);
-    let file = File::create(path)?;
+pub fn write_rgba_to_png(
+    width: u16,
+    height: u16,
+    array: &[u8],
+    savepath: impl AsRef<Path>,
+) -> ArcResult<()> {
+    let file = File::create(savepath)?;
 
     let w = BufWriter::new(file);
 

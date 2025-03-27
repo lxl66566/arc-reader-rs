@@ -1,6 +1,10 @@
-use crate::decrypt::{hash_update, read8, read16, read32};
-use crate::error::{ArcError, ArcResult};
-use crate::write::write_rgba_to_png;
+use std::path::Path;
+
+use crate::{
+    decrypt::{hash_update, read8, read16, read32},
+    error::{ArcError, ArcResult},
+    write::write_rgba_to_png,
+};
 
 /// CBG 节点结构体
 #[derive(Debug, Clone)]
@@ -171,9 +175,8 @@ pub fn decrypt(crypted: &[u8]) -> ArcResult<(Vec<u8>, u16, u16)> {
 }
 
 /// 将 CBG 数据保存为 PNG 文件
-pub fn save(data: &[u8], width: u16, height: u16, filename: &str) -> ArcResult<()> {
-    let file_name = format!("{}.png", filename);
-    write_rgba_to_png(width, height, data, &file_name)?;
+pub fn save(data: &[u8], width: u16, height: u16, savepath: impl AsRef<Path>) -> ArcResult<()> {
+    write_rgba_to_png(width, height, data, savepath.as_ref().with_extension("png"))?;
     Ok(())
 }
 
