@@ -19,3 +19,17 @@ jobs:
         uses: mozilla-actions/sccache-action@v0.0.5
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo nextest run && cargo test --doc
+
+  auto-merge:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.actor == 'dependabot[bot]'
+    permissions:
+      pull-requests: write
+      contents: write
+    steps:
+      - name: Enable auto-merge for Dependabot PRs
+        run: gh pr merge --auto --merge "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
