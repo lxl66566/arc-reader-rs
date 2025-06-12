@@ -27,6 +27,15 @@ arc-reader pack <INPUT_DIR> [OUTPUT_FILE] [-v <version>]
 
 执行 `arc-reader -h` 查看详细信息。
 
+## 测试
+
+已在下列游戏的 .arc 存档通过了测试（仅测试了 data04 开头的音频存档）：
+
+- 千の刃涛、桃花染の皇姫
+- ジュエリー・ハーツ・アカデミア -We will wing wonder world-
+- 大図書館の羊飼い (arc version 1)
+- 大図書館の羊飼い -Dreaming Sheep-
+
 ## LICENSE
 
 保留了[原始项目的 LICENSE](./licence.txt)。

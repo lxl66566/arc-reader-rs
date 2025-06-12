@@ -27,6 +27,15 @@ arc-reader pack <INPUT_DIR> [OUTPUT_FILE] [-v <version>]
 
 Run `arc-reader -h` for detailed information.
 
+## Tested on
+
+Passed the test on .arc files of the following games (only tested on audio arcs):
+
+- 千の刃涛、桃花染の皇姫
+- ジュエリー・ハーツ・アカデミア -We will wing wonder world-
+- 大図書館の羊飼い (arc version 1)
+- 大図書館の羊飼い -Dreaming Sheep-
+
 ## LICENSE
 
 The [original project's LICENSE](./licence.txt) is retained.
