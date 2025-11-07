@@ -212,10 +212,10 @@ fn color_avg(x: u32, y: u32) -> u32 {
 
 // 辅助函数：颜色加法
 fn color_add(x: u32, y: u32) -> u32 {
-    let a = ((x & 0xFF000000) + (y & 0xFF000000)) & 0xFF000000;
-    let r = ((x & 0x00FF0000) + (y & 0x00FF0000)) & 0x00FF0000;
-    let g = ((x & 0x0000FF00) + (y & 0x0000FF00)) & 0x0000FF00;
-    let b = ((x & 0x000000FF) + (y & 0x000000FF)) & 0x000000FF;
+    let a = (x & 0xFF000000).wrapping_add(y & 0xFF000000) & 0xFF000000;
+    let r = (x & 0x00FF0000).wrapping_add(y & 0x00FF0000) & 0x00FF0000;
+    let g = (x & 0x0000FF00).wrapping_add(y & 0x0000FF00) & 0x0000FF00;
+    let b = (x & 0x000000FF).wrapping_add(y & 0x000000FF) & 0x000000FF;
 
     a | r | g | b
 }

@@ -90,7 +90,9 @@ impl Arc {
 
         let mut file_clone = self.file.try_clone()?;
 
-        file_clone.seek(SeekFrom::Start((self.data + file_info.offset) as u64))?;
+        file_clone.seek(SeekFrom::Start(
+            (self.data as u64) + (file_info.offset as u64),
+        ))?;
 
         file_clone.read_exact(&mut data)?;
 

@@ -6,8 +6,6 @@
 
 同时，本项目还额外添加了 `.ogg` 音频包的解包与封包支持。其他格式暂时未支持，欢迎 PR。
 
-本项目的主要编写者为 claude-3.7，感谢其对本项目的大力支持。
-
 ## 功能
 
 - 解包 .arc 文件
@@ -18,7 +16,7 @@
 
 ## 用法
 
-请在 [Release](https://github.com/lxl66566/arc-reader-rs/releases/) 下载编译好的命令行二进制文件。
+请在 [Release](https://github.com/lxl66566/arc-reader-rs/releases/) 下载预编译的命令行二进制文件。
 
 ```sh
 arc-reader unpack <ARC_FILE> [OUTPUT_PATH]
@@ -29,12 +27,15 @@ arc-reader pack <INPUT_DIR> [OUTPUT_FILE] [-v <version>]
 
 ## 测试
 
-已在下列游戏的 .arc 存档通过了测试（仅测试了 data04 开头的音频存档）：
+下列游戏的 .arc 存档已通过测试。
 
-- 千の刃涛、桃花染の皇姫
-- ジュエリー・ハーツ・アカデミア -We will wing wonder world-
-- 大図書館の羊飼い (arc version 1)
-- 大図書館の羊飼い -Dreaming Sheep-
+- `data04` 开头的音频存档：
+  - 千の刃涛、桃花染の皇姫
+  - ジュエリー・ハーツ・アカデミア -We will wing wonder world-
+  - 大図書館の羊飼い <span style="color: gray;">_(arc version 1)_</span>
+  - 大図書館の羊飼い -Dreaming Sheep-
+- `data02` 开头的图像存档：
+  - ジュエリー・ハーツ・アカデミア -We will wing wonder world-
 
 ## LICENSE
 

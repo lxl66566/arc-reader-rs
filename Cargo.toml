@@ -2,7 +2,7 @@
 description = "A tool to pack and unpack Arc files for BGI engine"
 edition     = "2024"
 name        = "arc-reader-rs"
-version     = "0.2.1"
+version     = "0.2.2"
 
 [dependencies]
 clap              = { version = "4.5", features = ["derive"] }

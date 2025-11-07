@@ -75,7 +75,11 @@ pub fn decrypt(data: &mut [u8]) -> ArcResult<()> {
 
 /// BSE 随机数生成器
 fn bse_rand(seed: &mut i32) -> i32 {
-    let tmp = ((((*seed * 257) >> 8) + *seed * 97) + 23) ^ -1496474763;
-    *seed = ((tmp >> 16) & 65535) | (tmp << 16);
+    let s = *seed;
+    let term1 = (s.wrapping_mul(257)) >> 8;
+    let term2 = s.wrapping_mul(97);
+    let tmp = (term1.wrapping_add(term2).wrapping_add(23)) ^ -1496474763;
+
+    *seed = tmp.rotate_left(16);
     *seed & 32767
 }

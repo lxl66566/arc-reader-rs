@@ -41,8 +41,13 @@ pub fn my_loword(v: u32) -> u16 {
 
 /// 更新哈希值
 pub fn hash_update(hash_val: &mut u32) -> u32 {
-    let edx = 20021 * my_loword(*hash_val) as u32;
-    let eax = (20021 * my_hiword(*hash_val) as u32) + (346 * *hash_val) + (my_hiword(edx) as u32);
-    *hash_val = ((my_loword(eax) as u32) << 16) + my_loword(edx) as u32 + 1;
+    let edx = 20021_u32.wrapping_mul(my_loword(*hash_val) as u32);
+    let eax = 20021_u32
+        .wrapping_mul(my_hiword(*hash_val) as u32)
+        .wrapping_add(346_u32.wrapping_mul(*hash_val))
+        .wrapping_add(my_hiword(edx) as u32);
+    *hash_val = ((my_loword(eax) as u32) << 16)
+        .wrapping_add(my_loword(edx) as u32)
+        .wrapping_add(1);
     eax & 0x7FFF
 }
