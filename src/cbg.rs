@@ -30,6 +30,9 @@ pub fn is_valid(data: &[u8], size: u32) -> bool {
 
 /// 解密 CBG 文件，返回解密后的数据以及宽度和高度
 pub fn decrypt(crypted: &[u8]) -> ArcResult<(Vec<u8>, u16, u16)> {
+    if crypted.len() < 48 {
+        return Err(ArcError::InvalidFormat);
+    }
     let mut data_ptr = &crypted[16..];
 
     let width = read16(&mut data_ptr);
@@ -40,26 +43,27 @@ pub fn decrypt(crypted: &[u8]) -> ArcResult<(Vec<u8>, u16, u16)> {
     let _ = read32(&mut data_ptr);
     let _ = read32(&mut data_ptr);
 
-    let data1_len = read32(&mut data_ptr);
-    let mut data0_val = read32(&mut data_ptr);
-    let data0_len = read32(&mut data_ptr);
+    let intermediate_len = read32(&mut data_ptr) as usize;
+    let mut key = read32(&mut data_ptr);
+    let enc_len = read32(&mut data_ptr) as usize;
     let sum_check = read8(&mut data_ptr);
     let xor_check = read8(&mut data_ptr);
+    let version = read16(&mut data_ptr);
 
-    // 读取未知字段
-    let _ = read16(&mut data_ptr);
+    if version >= 2 && enc_len >= 0x80 {
+        return Err(ArcError::UnsupportedFileType("CBG version 2".to_string()));
+    }
 
-    // 解密数据0
-    let mut data0 = vec![0u8; data0_len as usize];
-    let data0_src = &data_ptr[0..data0_len as usize];
+    // 解密数据0 (Huffman 权重表)
+    let mut data0 = vec![0u8; enc_len];
+    let data0_src = &data_ptr[0..enc_len];
     let mut sum_data = 0u8;
     let mut xor_data = 0u8;
 
-    for n in 0..data0_len {
-        data0[n as usize] =
-            data0_src[n as usize].wrapping_sub((hash_update(&mut data0_val) & 0xFF) as u8);
-        sum_data = sum_data.wrapping_add(data0[n as usize]);
-        xor_data ^= data0[n as usize];
+    for n in 0..enc_len {
+        data0[n] = data0_src[n].wrapping_sub((hash_update(&mut key) & 0xFF) as u8);
+        sum_data = sum_data.wrapping_add(data0[n]);
+        xor_data ^= data0[n];
     }
 
     if sum_data != sum_check || xor_data != xor_check {
@@ -70,106 +74,124 @@ pub fn decrypt(crypted: &[u8]) -> ArcResult<(Vec<u8>, u16, u16)> {
     let mut ptr = &data0[..];
     let table: [u32; 256] = std::array::from_fn(|_| read_variable(&mut ptr));
 
-    // 执行方法2，构建解压表
+    // 构建解压表
     let mut table2 = vec![NodeCBG::new(); 511];
-    let method2_res = method2(&table, &mut table2);
+    let root = method2(&table, &mut table2);
 
-    // 解压数据1
-    data_ptr = &data_ptr[data0_len as usize..];
-    let mut data1 = vec![0u8; data1_len as usize];
+    // 解压数据1 (Huffman 解压)
+    let mut packed_src = &data_ptr[enc_len..];
+    let mut data1 = vec![0u8; intermediate_len];
 
     let mut mask = 0x80u8;
     let mut current_byte = 0u8;
 
-    for n in 0..data1_len {
-        let mut cvalue = method2_res;
-
-        if table2[method2_res as usize].vv[2] == 1 {
-            loop {
-                if mask == 0x80 {
-                    current_byte = data_ptr[0];
-                    data_ptr = &data_ptr[1..];
-                }
-
-                let bit = if (current_byte & mask) != 0 { 1 } else { 0 };
-                mask = if mask == 0x01 { 0x80 } else { mask >> 1 };
-
-                cvalue = table2[cvalue as usize].vv[4 + bit];
-
-                if table2[cvalue as usize].vv[2] != 1 {
+    for n in 0..intermediate_len {
+        let mut cvalue = root;
+        while table2[cvalue as usize].vv[2] == 1 {
+            if mask == 0x80 {
+                if packed_src.is_empty() {
                     break;
+                }
+                current_byte = packed_src[0];
+                packed_src = &packed_src[1..];
+            }
+
+            let bit = if (current_byte & mask) != 0 { 1 } else { 0 };
+            mask = if mask == 0x01 { 0x80 } else { mask >> 1 };
+
+            cvalue = table2[cvalue as usize].vv[4 + bit];
+        }
+        data1[n] = cvalue as u8;
+    }
+
+    // 解码数据3 (Zero 解压/RLE)
+    let pixel_size = (bpp / 8) as usize;
+    let stride = width as usize * pixel_size;
+    let mut raw_pixels = vec![0u8; stride * height as usize];
+
+    let mut psrc = &data1[..];
+    let mut is_zero = false;
+    let mut dst_idx = 0;
+
+    while !psrc.is_empty() && dst_idx < raw_pixels.len() {
+        let count = read_variable(&mut psrc) as usize;
+        let end = (dst_idx + count).min(raw_pixels.len());
+        if !is_zero {
+            let to_copy = (end - dst_idx).min(psrc.len());
+            raw_pixels[dst_idx..dst_idx + to_copy].copy_from_slice(&psrc[..to_copy]);
+            psrc = &psrc[to_copy..];
+        }
+        dst_idx = end;
+        is_zero = !is_zero;
+    }
+
+    // 逆向平均采样 (Reverse Average Sampling)
+    for y in 0..height as usize {
+        let line = y * stride;
+        for x in 0..width as usize {
+            let pixel_off = line + x * pixel_size;
+            for p in 0..pixel_size {
+                let mut avg = 0u32;
+                if x > 0 {
+                    avg += raw_pixels[pixel_off + p - pixel_size] as u32;
+                }
+                if y > 0 {
+                    avg += raw_pixels[pixel_off + p - stride] as u32;
+                }
+                if x > 0 && y > 0 {
+                    avg /= 2;
+                }
+                if avg != 0 {
+                    raw_pixels[pixel_off + p] = raw_pixels[pixel_off + p].wrapping_add(avg as u8);
                 }
             }
         }
-
-        data1[n as usize] = cvalue as u8;
     }
 
-    // 解码数据3
-    let mut data3 = Vec::with_capacity(width as usize * height as usize * 4);
-    let mut psrc = &data1[..];
-    let mut type_flag = false;
-
-    while !psrc.is_empty() {
-        let len = read_variable(&mut psrc) as usize;
-        if type_flag {
-            data3.resize(data3.len() + len, 0);
-        } else {
-            data3.extend_from_slice(&psrc[..len]);
-            psrc = &psrc[len..];
-        }
-        type_flag = !type_flag;
-    }
-
-    // 解码图像数据
-    let mut data = vec![0u32; (width as usize) * (height as usize)];
-    let mut src = &data3[..];
-
-    let mut c = 0u32;
-
-    // 第一行
-    for x in 0..width {
-        c = color_add(c, extract(&mut src, bpp));
-        data[x as usize] = c;
-    }
-
-    // 其余行
-    for y in 1..height {
-        let row_start = y as usize * width as usize;
-        let prev_row_start = (y - 1) as usize * width as usize;
-
-        // 每行第一个像素
-        c = color_add(data[prev_row_start], extract(&mut src, bpp));
-        data[row_start] = c;
-
-        // 每行其余像素
-        for x in 1..width {
-            let moy = color_avg(c, data[prev_row_start + x as usize]);
-            c = color_add(moy, extract(&mut src, bpp));
-            data[row_start + x as usize] = c;
+    // 转换为 RGBA [R, G, B, A]
+    let mut pixels = Vec::with_capacity(width as usize * height as usize * 4);
+    for px in 0..(width as usize * height as usize) {
+        let off = px * pixel_size;
+        match bpp {
+            32 => {
+                // BGRA -> RGBA
+                pixels.extend_from_slice(&[
+                    raw_pixels[off + 2],
+                    raw_pixels[off + 1],
+                    raw_pixels[off],
+                    raw_pixels[off + 3],
+                ]);
+            }
+            24 => {
+                // BGR -> RGBA
+                pixels.extend_from_slice(&[
+                    raw_pixels[off + 2],
+                    raw_pixels[off + 1],
+                    raw_pixels[off],
+                    255,
+                ]);
+            }
+            8 => {
+                // Gray -> RGBA
+                let v = raw_pixels[off];
+                pixels.extend_from_slice(&[v, v, v, 255]);
+            }
+            16 => {
+                // Bgr565 -> RGBA (Assumed B-high, R-low as per Bgr565 common usage)
+                let val = u16::from_le_bytes([raw_pixels[off], raw_pixels[off + 1]]);
+                let b = ((val >> 11) & 0x1F) as u8;
+                let g = ((val >> 5) & 0x3F) as u8;
+                let r = (val & 0x1F) as u8;
+                pixels.push((r << 3) | (r >> 2));
+                pixels.push((g << 2) | (g >> 4));
+                pixels.push((b << 3) | (b >> 2));
+                pixels.push(255);
+            }
+            _ => {
+                pixels.extend_from_slice(&[0, 0, 0, 255]);
+            }
         }
     }
-
-    let pixels: Vec<u8> = (0..(width as usize * height as usize))
-        .flat_map(|px| {
-            let (r, g, b, a) = if bpp == 32 {
-                (
-                    ((data[px] >> 16) & 0xFF) as u8,
-                    ((data[px] >> 8) & 0xFF) as u8,
-                    (data[px] & 0xFF) as u8,
-                    ((data[px] >> 24) & 0xFF) as u8,
-                )
-            } else {
-                (
-                    (data[px] & 0xFF) as u8,
-                    ((data[px] >> 8) & 0xFF) as u8,
-                    ((data[px] >> 16) & 0xFF) as u8,
-                    0xFF,
-                )
-            };
-            [r, g, b, a]
-        })
-        .collect();
 
     Ok((pixels, width, height))
 }
@@ -185,55 +207,21 @@ fn read_variable(ptr: &mut &[u8]) -> u32 {
     let mut v = 0u32;
     let mut shift = 0i32;
 
-    loop {
-        let c = ptr[0];
+    while let Some(&c) = ptr.first() {
         *ptr = &ptr[1..];
 
         v |= ((c & 0x7F) as u32) << shift;
         shift += 7;
 
         if (c & 0x80) == 0 {
+            return v;
+        }
+        if shift >= 32 {
             break;
         }
     }
 
     v
-}
-
-// 辅助函数：颜色平均值
-fn color_avg(x: u32, y: u32) -> u32 {
-    let a = (((x & 0xFF000000) / 2) + ((y & 0xFF000000) / 2)) & 0xFF000000;
-    let r = (((x & 0x00FF0000) + (y & 0x00FF0000)) / 2) & 0x00FF0000;
-    let g = (((x & 0x0000FF00) + (y & 0x0000FF00)) / 2) & 0x0000FF00;
-    let b = (((x & 0x000000FF) + (y & 0x000000FF)) / 2) & 0x000000FF;
-
-    a | r | g | b
-}
-
-// 辅助函数：颜色加法
-fn color_add(x: u32, y: u32) -> u32 {
-    let a = (x & 0xFF000000).wrapping_add(y & 0xFF000000) & 0xFF000000;
-    let r = (x & 0x00FF0000).wrapping_add(y & 0x00FF0000) & 0x00FF0000;
-    let g = (x & 0x0000FF00).wrapping_add(y & 0x0000FF00) & 0x0000FF00;
-    let b = (x & 0x000000FF).wrapping_add(y & 0x000000FF) & 0x000000FF;
-
-    a | r | g | b
-}
-
-// 辅助函数：提取颜色
-fn extract(src: &mut &[u8], bpp: u32) -> u32 {
-    if bpp == 32 {
-        read32(src)
-    } else {
-        let r = read8(src);
-        let (g, b) = if bpp == 24 {
-            (read8(src), read8(src))
-        } else {
-            (r, r)
-        };
-
-        0xff000000 | ((r as u32) << 16) | ((g as u32) << 8) | (b as u32)
-    }
 }
 
 // 辅助函数：构建解压缩表
