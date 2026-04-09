@@ -8,21 +8,27 @@ use log::info;
 
 use crate::error::{ArcError, ArcResult};
 
-// 定义版本特定的常量
+// Version-specific constants
 pub const V1_MAGIC: &[u8] = b"PackFile    ";
 pub const V2_MAGIC: &[u8] = b"BURIKO ARC20";
-pub const V1_METADATA_SIZE: u32 = 32; // 16 (name) + 4 (offset) + 4 (size) + 8 (padding)
-pub const V2_METADATA_SIZE: u32 = 112; // 16 (name) + 80 (20*4 padding) + 4 (offset) + 4 (size) + 24 (6*4 padding)
 
-/// 文件结构体，表示 ARC 归档中的单个文件
+// V1 entry: 16 (name) + 4 (offset) + 4 (size) + 8 (padding) = 32 bytes
+pub const V1_METADATA_SIZE: u32 = 32;
+// V2 entry: 96 (name) + 4 (offset) + 4 (size) + 24 (padding) = 128 bytes (0x80)
+pub const V2_METADATA_SIZE: u32 = 128;
+
+const V1_NAME_LEN: usize = 16;
+const V2_NAME_LEN: usize = 96;
+
+/// Represents a single file entry within an ARC archive.
 #[derive(Debug, Clone)]
 struct ArcFile {
-    name: [u8; 16],
+    name: Vec<u8>,
     offset: u32,
     size: u32,
 }
 
-/// ARC 归档结构体
+/// ARC archive reader.
 pub struct Arc {
     file: File,
     data: u32,
@@ -31,35 +37,35 @@ pub struct Arc {
 }
 
 impl Arc {
-    /// 打开 ARC 文件并解析其内容
+    /// Open an ARC file and parse its index.
     pub fn open<P: AsRef<Path>>(filename: P) -> ArcResult<Self> {
         let mut file = File::open(&filename)?;
 
-        // 检查是否为有效的 ARC 文件
+        // Read and validate the magic signature
         let mut magic_string = [0u8; 12];
         file.read_exact(&mut magic_string)?;
 
         let version = if &magic_string == b"PackFile    " {
-            1 // v1
+            1
         } else if &magic_string == b"BURIKO ARC20" {
-            2 // v2
+            2
         } else {
             return Err(ArcError::InvalidFormat);
         };
-        info!("ARC 版本: {}", version);
+        info!("ARC version: {}", version);
 
-        // 读取文件数量
+        // Read the number of file entries
         let mut buffer = [0u8; 4];
         file.read_exact(&mut buffer)?;
         let number_of_files = u32::from_le_bytes(buffer);
 
-        // 读取文件元数据
+        // Read all file metadata entries
         let mut files = Vec::with_capacity(number_of_files as usize);
         for _ in 0..number_of_files {
             let file_info = if version == 1 {
-                Self::read_next_file_metadata_v1(&mut file)?
+                Self::read_metadata_v1(&mut file)?
             } else {
-                Self::read_next_file_metadata_v2(&mut file)?
+                Self::read_metadata_v2(&mut file)?
             };
             files.push(file_info);
         }
@@ -74,12 +80,12 @@ impl Arc {
         })
     }
 
-    /// 获取文件数量
+    /// Returns the total number of files in the archive.
     pub fn files_count(&self) -> u32 {
         self.count
     }
 
-    /// 获取指定索引的文件数据
+    /// Read the raw data for the file at the given index.
     pub fn get_file_data(&self, idx: u32) -> ArcResult<Vec<u8>> {
         if idx >= self.count {
             return Err(ArcError::IndexOutOfBounds(idx, self.count));
@@ -99,7 +105,7 @@ impl Arc {
         Ok(data)
     }
 
-    /// 获取指定索引的文件大小
+    /// Returns the original (compressed) size for the file at the given index.
     pub fn get_file_size(&self, idx: u32) -> ArcResult<u32> {
         if idx >= self.count {
             return Err(ArcError::IndexOutOfBounds(idx, self.count));
@@ -107,79 +113,78 @@ impl Arc {
         Ok(self.files[idx as usize].size)
     }
 
-    /// 获取指定索引的文件名
+    /// Returns the null-terminated filename for the file at the given index.
     pub fn get_file_name(&self, idx: u32) -> ArcResult<&str> {
         if idx >= self.count {
             return Err(ArcError::IndexOutOfBounds(idx, self.count));
         }
 
         let name_bytes = &self.files[idx as usize].name;
-        // 找到第一个 0 作为字符串结束
+        // Find the first null byte
         let len = name_bytes
             .iter()
             .position(|&b| b == 0)
             .unwrap_or(name_bytes.len());
 
-        // 转换为字符串
-        Ok(std::str::from_utf8(&name_bytes[0..len])?)
+        Ok(std::str::from_utf8(&name_bytes[..len])?)
     }
 
-    // 读取 v1 版本的文件元数据
-    fn read_next_file_metadata_v1(file: &mut File) -> ArcResult<ArcFile> {
-        let mut name = [0u8; 16];
+    /// Read a V1 metadata entry (32 bytes per entry).
+    ///
+    /// Layout: [16 name][4 offset][4 size][8 padding]
+    fn read_metadata_v1(file: &mut File) -> ArcResult<ArcFile> {
+        let mut name = vec![0u8; V1_NAME_LEN];
         file.read_exact(&mut name)?;
 
-        // 清理非 ASCII 字节
-        for j in 0..16 {
-            if name[j] != 0 && (name[j] < 32 || name[j] > 127) {
-                name[j] = b'_';
-            }
-        }
+        sanitize_name(&mut name);
 
         let mut buffer = [0u8; 4];
 
-        // 读取偏移量
         file.read_exact(&mut buffer)?;
         let offset = u32::from_le_bytes(buffer);
 
-        // 读取大小
         file.read_exact(&mut buffer)?;
         let size = u32::from_le_bytes(buffer);
 
-        // 跳过填充
+        // Skip trailing padding
         file.seek(SeekFrom::Current(8))?;
 
         Ok(ArcFile { name, offset, size })
     }
 
-    // 读取 v2 版本的文件元数据
-    fn read_next_file_metadata_v2(file: &mut File) -> ArcResult<ArcFile> {
-        let mut name = [0u8; 16];
+    /// Read a V2 metadata entry (128 bytes per entry).
+    ///
+    /// Layout: [96 name][4 offset][4 size][24 padding]
+    /// Matches GARBro's `Arc2Opener.TryOpen()` which reads name at `0x60`
+    /// bytes.
+    fn read_metadata_v2(file: &mut File) -> ArcResult<ArcFile> {
+        let mut name = vec![0u8; V2_NAME_LEN];
         file.read_exact(&mut name)?;
 
-        // 清理非 ASCII 字节
-        for j in 0..16 {
-            if name[j] != 0 && (name[j] < 32 || name[j] > 127) {
-                name[j] = b'_';
-            }
-        }
-
-        // 跳过填充
-        file.seek(SeekFrom::Current(20 * 4))?;
+        sanitize_name(&mut name);
 
         let mut buffer = [0u8; 4];
 
-        // 读取偏移量
+        // Offset is at 0x60 (96)
         file.read_exact(&mut buffer)?;
         let offset = u32::from_le_bytes(buffer);
 
-        // 读取大小
+        // Size is at 0x64 (100)
         file.read_exact(&mut buffer)?;
         let size = u32::from_le_bytes(buffer);
 
-        // 跳过填充
-        file.seek(SeekFrom::Current(6 * 4))?;
+        // Skip trailing 24 bytes padding (0x68..0x80)
+        file.seek(SeekFrom::Current(24))?;
 
         Ok(ArcFile { name, offset, size })
+    }
+}
+
+/// Replace non-printable-ASCII bytes in the name buffer with underscores.
+fn sanitize_name(name: &mut [u8]) {
+    for b in name.iter_mut() {
+        if *b != 0 && (*b < 32 || *b > 127) {
+            *b = b'_';
+        }
     }
 }

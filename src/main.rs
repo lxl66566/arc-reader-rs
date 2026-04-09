@@ -60,13 +60,20 @@ fn validate_version(v: &str) -> Result<u8, String> {
 }
 
 fn unpack_file(data: &[u8], filesize: u32, savepath: PathBuf) -> ArcResult<()> {
-    let mut bse_data = data.to_vec();
-
-    if bse::is_valid(data, filesize) {
+    // BSE wraps the inner file.  Only the 0x40-byte header at offsets 0x10..0x4F
+    // is encrypted; the body (from 0x50) is plaintext.
+    // After stripping the 0x10-byte BSE metadata, the inner payload is:
+    //   decrypted_header (0x40 bytes) + body (rest)
+    let bse_data = if bse::is_valid(data, filesize) {
         debug!("BSE...");
-        bse::decrypt(&mut bse_data)?;
-        bse_data = data[16..].to_vec();
-    }
+        let mut payload = data.to_vec();
+        bse::decrypt(&mut payload)?;
+        // Strip the 0x10-byte BSE metadata; the decrypted header + body remain
+        payload[0x10..].to_vec()
+    } else {
+        data.to_vec()
+    };
+
     if dsc::is_valid(&bse_data, filesize) {
         debug!("DSC...");
         let (decrypted, size) = dsc::decrypt(&bse_data, filesize)?;
@@ -89,11 +96,17 @@ fn unpack_file(data: &[u8], filesize: u32, savepath: PathBuf) -> ArcResult<()> {
     Ok(())
 }
 
-// 写入文件名的辅助函数，用于封包
-fn write_filename(arc_file: &mut impl std::io::Write, file_name: &str) -> std::io::Result<()> {
-    let mut name_bytes = [0u8; 16];
-    let name_len = file_name.len().min(16);
-    name_bytes[..name_len].copy_from_slice(&file_name.as_bytes()[..name_len]);
+// Write filename helper for pack operations.
+// V1: 16 bytes, V2: 96 bytes (matching GARBro's 0x60 name field).
+fn write_filename(
+    arc_file: &mut impl std::io::Write,
+    file_name: &str,
+    version: u8,
+) -> std::io::Result<()> {
+    let name_len_limit = if version == 1 { 16 } else { 96 };
+    let mut name_bytes = vec![0u8; name_len_limit];
+    let copy_len = file_name.len().min(name_len_limit);
+    name_bytes[..copy_len].copy_from_slice(&file_name.as_bytes()[..copy_len]);
     arc_file.write_all(&name_bytes)
 }
 
@@ -200,23 +213,20 @@ fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
             let _header_size = 16u32 + (files.len() as u32 * metadata_size);
             let mut current_offset = 0u32;
 
-            // 写入文件元数据
+            // Write file metadata entries.
+            // V1: [16 name][4 offset][4 size][8 padding] = 32 bytes
+            // V2: [96 name][4 offset][4 size][24 padding] = 128 bytes
             for (file_name, data) in &files {
-                write_filename(&mut arc_file, file_name)?;
-
-                // 版本特定填充
-                if version == 2 {
-                    arc_file.write_all(&[0u8; 80])?; // 20 * 4 bytes
-                }
+                write_filename(&mut arc_file, file_name, version)?;
 
                 arc_file.write_all(&current_offset.to_le_bytes())?;
                 arc_file.write_all(&(data.len() as u32).to_le_bytes())?;
 
-                // 版本特定尾部填充
+                // Version-specific trailing padding
                 arc_file.write_all(match version {
                     1 => &[0u8; 8],
                     2 => &[0u8; 24],
-                    _ => unreachable!("没有这个版本"),
+                    _ => unreachable!("invalid version"),
                 })?;
 
                 current_offset += data.len() as u32;

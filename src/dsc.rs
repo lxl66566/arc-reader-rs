@@ -1,7 +1,7 @@
 use std::{fs::File, io::Write, path::Path};
 
 use crate::{
-    decrypt::{hash_update, read8, read16, read32},
+    decrypt::{hash_update, read16, read32, read8},
     error::ArcResult,
     write::write_rgba_to_png,
 };
