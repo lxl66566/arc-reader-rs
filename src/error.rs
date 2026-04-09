@@ -4,22 +4,22 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum ArcError {
-    #[error("IO错误: {0}")]
+    #[error("IO error: {0}")]
     Io(#[from] io::Error),
 
-    #[error("无效的ARC文件格式")]
+    #[error("Invalid ARC file format")]
     InvalidFormat,
 
-    #[error("文件索引越界: {0} >= {1}")]
+    #[error("File index out of bounds: {0} >= {1}")]
     IndexOutOfBounds(u32, u32),
 
-    #[error("无效的文件名编码: {0}")]
+    #[error("Invalid filename encoding: {0}")]
     InvalidFileName(#[from] std::str::Utf8Error),
 
-    #[error("BSE解密失败")]
+    #[error("BSE decryption failed")]
     BseDecryptError,
 
-    #[error("DSC解密失败")]
+    #[error("DSC decryption failed")]
     DscDecryptError,
 
     #[error("CBG decryption failed")]

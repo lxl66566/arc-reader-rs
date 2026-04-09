@@ -11,9 +11,9 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: release rust project
-        uses: lxl66566/rust-simple-release@v0.2.6
+        uses: lxl66566/rust-simple-release@main
         with:
           targets: |
             aarch64-unknown-linux-gnu

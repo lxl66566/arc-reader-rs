@@ -9,12 +9,13 @@ mod error;
 mod ogg;
 mod write;
 
-use std::{fs, io::Write, path::PathBuf};
+use std::{fs, io::Write, path::PathBuf, sync::Mutex};
 
 use arc::{V1_MAGIC, V1_METADATA_SIZE, V2_MAGIC, V2_METADATA_SIZE};
 use clap::{Parser, Subcommand};
 use error::{ArcError, ArcResult};
 use log::{debug, error, info, warn};
+use rayon::prelude::*;
 
 use crate::arc::{V1_NAME_LEN, V2_NAME_LEN};
 
@@ -27,38 +28,38 @@ struct Args {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// 解包 ARC 文件
+    /// Unpack ARC file
     Unpack {
-        /// ARC 文件路径
+        /// Path to ARC file
         #[arg(required = true)]
         arc_file: PathBuf,
 
-        /// 输出目录路径（可选）
+        /// Output directory path (optional)
         #[arg(required = false)]
         output_path: Option<PathBuf>,
     },
-    /// 封包为 ARC 文件
+    /// Pack directory into ARC file
     Pack {
-        /// 要封包的目录路径
+        /// Path to directory to pack
         #[arg(required = true)]
         input_dir: PathBuf,
 
-        /// 输出的 ARC 文件路径
+        /// Output ARC file path
         #[arg(required = false)]
         output_file: Option<PathBuf>,
 
-        /// ARC 版本
+        /// ARC version
         #[arg(long, short, default_value = "2", value_parser = validate_version)]
         version: u8,
     },
 }
 
 fn validate_version(v: &str) -> Result<u8, String> {
-    let v = v.parse::<u8>().map_err(|_| "无效的版本")?;
+    let v = v.parse::<u8>().map_err(|_| "Invalid version")?;
     if v == 1 || v == 2 {
         Ok(v)
     } else {
-        Err("无效的版本，可选值为 1 或 2".to_string())
+        Err("Invalid version, only 1 or 2 are allowed".to_string())
     }
 }
 
@@ -135,30 +136,37 @@ fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
                 fs::create_dir_all(&out_dir)?;
             }
 
-            info!("文件数量: {}", count);
+            info!("File count: {}", count);
 
-            for i in 0..count {
-                let file_name = arc.get_file_name(i).map_err(|e| {
-                    error!("无法获取文件名: {}", e);
-                    e
-                })?;
+            // Collect file info for parallel processing
+            let file_infos: Vec<(u32, String, Vec<u8>, u32)> = (0..count)
+                .filter_map(|i| {
+                    let file_name = arc.get_file_name(i).ok()?;
+                    let raw_data = arc.get_file_data(i).ok()?;
+                    let filesize = arc.get_file_size(i).ok()?;
+                    Some((i, file_name.to_string(), raw_data, filesize))
+                })
+                .collect();
 
-                let savepath = out_dir.join(file_name);
+            // Process files in parallel
+            let errors = Mutex::new(Vec::new());
+            file_infos
+                .par_iter()
+                .for_each(|(i, file_name, raw_data, filesize)| {
+                    info!("Extracting {}", file_name);
+                    let savepath = out_dir.join(file_name);
+                    if let Err(e) = unpack_file(raw_data, *filesize, savepath) {
+                        error!("Failed to process file {}: {}", file_name, e);
+                        errors.lock().unwrap().push((*i, file_name.clone(), e));
+                    }
+                });
 
-                info!("extracting {}", file_name);
-
-                let raw_data = arc.get_file_data(i).map_err(|e| {
-                    error!("无法读取文件数据: {}", e);
-                    e
-                })?;
-
-                let filesize = arc.get_file_size(i).map_err(|e| {
-                    error!("无法获取文件大小: {}", e);
-                    e
-                })?;
-
-                if let Err(e) = unpack_file(&raw_data, filesize, savepath) {
-                    error!("处理文件失败: {}", e);
+            // Report any errors
+            let errors = errors.into_inner().unwrap();
+            if !errors.is_empty() {
+                error!("Failed to process {} files:", errors.len());
+                for (_, name, e) in &errors {
+                    error!("  - {}: {}", name, e);
                 }
             }
         }
@@ -170,13 +178,13 @@ fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
             let output_file = output_file.unwrap_or(input_dir.with_extension("arc"));
             let mut files = Vec::new();
 
-            // 遍历目录中的所有文件
+            // Iterate through all files in the directory
             for entry in fs::read_dir(input_dir)? {
                 let entry = entry?;
                 let path = entry.path();
 
                 if !path.is_file() {
-                    warn!("{} 不是文件，跳过处理", path.display());
+                    warn!("{} is not a file, skipping", path.display());
                     continue;
                 }
 
@@ -186,41 +194,41 @@ fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
 
                 let file_name = temp_path
                     .file_name()
-                    .ok_or("无效的文件名")?
+                    .ok_or("Invalid filename")?
                     .to_str()
-                    .ok_or("无效的文件名编码")?;
+                    .ok_or("Invalid filename encoding")?;
 
-                // 读取文件内容
+                // Read file content
                 let mut data = fs::read(&path)?;
 
-                // 如果是 OGG 文件，添加头部
+                // If it's an OGG file, add header
                 if ogg::is_ogg(&data) {
                     data = ogg::add_header(data);
                 } else {
-                    error!("暂不支持该文件类型，欢迎 PR");
+                    error!("Unsupported file type");
                     return Err(Box::new(ArcError::UnsupportedFileType(
                         path.display().to_string(),
                     )));
                 }
 
-                // 将文件名和数据添加到列表中
+                // Add filename and data to the list
                 files.push((file_name.to_string(), data));
             }
 
-            // 创建 ARC 文件
+            // Create ARC file
             let mut arc_file = fs::File::create(output_file)?;
 
             let (magic, metadata_size) = match version {
                 1 => (V1_MAGIC, V1_METADATA_SIZE),
                 2 => (V2_MAGIC, V2_METADATA_SIZE),
-                _ => unreachable!("没有这个版本"),
+                _ => unreachable!("No such version"),
             };
 
-            // 写入魔数和文件数量
+            // Write magic number and file count
             arc_file.write_all(magic)?;
             arc_file.write_all(&(files.len() as u32).to_le_bytes())?;
 
-            // 计算数据段起始位置
+            // Calculate data section start position
             let _header_size = 16u32 + (files.len() as u32 * metadata_size);
             let mut current_offset = 0u32;
 
@@ -243,7 +251,7 @@ fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
                 current_offset += data.len() as u32;
             }
 
-            // 写入文件数据
+            // Write file data
             for (_, data) in files {
                 arc_file.write_all(&data)?;
             }

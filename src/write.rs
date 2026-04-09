@@ -2,10 +2,14 @@ use std::{fs::File, io::BufWriter, path::Path};
 
 use crate::error::{ArcError, ArcResult};
 
-/// 将 RGBA 数据保存为 PNG 文件
+// Type aliases for better readability
+type ImageWidth = u16;
+type ImageHeight = u16;
+
+/// Write RGBA pixel data to a PNG file
 pub fn write_rgba_to_png(
-    width: u16,
-    height: u16,
+    width: ImageWidth,
+    height: ImageHeight,
     array: &[u8],
     savepath: impl AsRef<Path>,
 ) -> ArcResult<()> {

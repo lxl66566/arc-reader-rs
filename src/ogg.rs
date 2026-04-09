@@ -72,14 +72,17 @@ pub fn save(data: &[u8], savepath: impl AsRef<Path>) -> ArcResult<()> {
 }
 
 fn calculate_sample_count(ogg_data: &[u8]) -> u32 {
-    // 使用内存游标读取OGG数据
+    // Use memory cursor to read OGG data
     let cursor = Cursor::new(ogg_data);
-    let mut osr = OggStreamReader::new(cursor).unwrap();
+    let mut osr = match OggStreamReader::new(cursor) {
+        Ok(reader) => reader,
+        Err(_) => return 0,
+    };
 
-    // 计算总采样点数
-    let mut total_samples = 0;
+    // Calculate total sample count
+    let mut total_samples = 0u32;
     while let Ok(Some(packet)) = osr.read_dec_packet_itl() {
-        total_samples += packet.len() as u32;
+        total_samples = total_samples.saturating_add(packet.len() as u32);
     }
 
     total_samples

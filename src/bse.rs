@@ -2,6 +2,8 @@
 //!
 //! Supports BSE 1.0 and BSE 1.1, matching GARBro's ArcBGI.cs implementation.
 
+use smallvec::SmallVec;
+
 use crate::error::{ArcError, ArcResult};
 
 /// Check whether the data starts with a valid BSE 1.x signature.
@@ -35,7 +37,7 @@ pub fn decrypt(data: &mut [u8]) -> ArcResult<()> {
     let key = read32_from(data, 0x0C) as i32;
 
     // Decrypt the 0x40-byte header starting at offset 0x10
-    let mut flags = [false; 0x40];
+    let mut flags: SmallVec<[bool; 64]> = SmallVec::from([false; 0x40]);
 
     let mut hash = key;
     for _ in 0..0x40 {

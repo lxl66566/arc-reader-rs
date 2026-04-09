@@ -5,7 +5,10 @@
 
 use std::path::Path;
 
-use crate::{decrypt::read16, error::ArcResult, write::write_rgba_to_png};
+use bytes::Buf;
+use memchr::memchr;
+
+use crate::{error::ArcResult, write::write_rgba_to_png};
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -18,43 +21,37 @@ pub fn is_valid(data: &[u8], size: u32) -> bool {
     }
 
     let mut ptr = data;
-    let width = read16(&mut ptr) as i32;
+    let width = ptr.get_u16_le() as i32;
     if width <= 0 || width > 8096 {
         return false;
     }
 
-    let height = read16(&mut ptr) as i32;
+    let height = ptr.get_u16_le() as i32;
     if height <= 0 || height > 8096 {
         return false;
     }
 
-    let bpp = read16(&mut ptr) as i32;
+    let bpp = ptr.get_u16_le() as i32;
     if bpp != 8 && bpp != 24 && bpp != 32 {
         return false;
     }
 
-    let flag = read16(&mut ptr) as i32;
+    let flag = ptr.get_u16_le() as i32;
     if flag != 0 && flag != 1 {
         return false;
     }
 
     // Bytes 8..16 must be zero
-    for &b in &data[8..16] {
-        if b != 0 {
-            return false;
-        }
-    }
-
-    true
+    memchr(0, &data[8..16]).is_none()
 }
 
 /// Decrypt a BGI image buffer, returning (RGBA pixels, width, height).
 pub fn decrypt(data: &[u8]) -> ArcResult<(Vec<u8>, u16, u16)> {
     let mut ptr = data;
-    let width = read16(&mut ptr);
-    let height = read16(&mut ptr);
-    let bpp = read16(&mut ptr) as u32;
-    let flag = read16(&mut ptr) as u32;
+    let width = ptr.get_u16_le();
+    let height = ptr.get_u16_le();
+    let bpp = ptr.get_u16_le() as u32;
+    let flag = ptr.get_u16_le() as u32;
 
     let pixel_size = (bpp / 8) as usize;
     let stride = width as usize * pixel_size;
@@ -143,27 +140,31 @@ fn restore_pixels(input: &[u8], output: &mut [u8], width: usize, height: usize, 
 // Conversion
 // ---------------------------------------------------------------------------
 
+/// Convert raw pixel data (BGR/BGRA/Gray) to RGBA.
 fn convert_to_rgba(data: &[u8], width: usize, height: usize, bpp: u32) -> Vec<u8> {
     let pixel_size = (bpp / 8) as usize;
     let total = width * height;
     let mut rgba = Vec::with_capacity(total * 4);
-    let mut src = 0usize;
 
-    for _ in 0..total {
+    for i in 0..total {
+        let src = i * pixel_size;
         match bpp {
             32 => {
                 // BGRX or BGRA: BGI stores as B,G,R,A
-                let b = data[src];
-                let g = data[src + 1];
-                let r = data[src + 2];
-                let a = data[src + 3];
-                rgba.extend_from_slice(&[r, g, b, a]);
+                rgba.extend_from_slice(&[
+                    data[src + 2], // R
+                    data[src + 1], // G
+                    data[src],     // B
+                    data[src + 3], // A
+                ]);
             }
             24 => {
-                let b = data[src];
-                let g = data[src + 1];
-                let r = data[src + 2];
-                rgba.extend_from_slice(&[r, g, b, 0xFF]);
+                rgba.extend_from_slice(&[
+                    data[src + 2], // R
+                    data[src + 1], // G
+                    data[src],     // B
+                    0xFF,          // A
+                ]);
             }
             8 => {
                 let v = data[src];
@@ -171,7 +172,6 @@ fn convert_to_rgba(data: &[u8], width: usize, height: usize, bpp: u32) -> Vec<u8
             }
             _ => {}
         }
-        src += pixel_size;
     }
 
     rgba

@@ -138,13 +138,10 @@ impl Arc {
 
         sanitize_name(&mut name);
 
-        let mut buffer = [0u8; 4];
-
+        let mut buffer = [0u8; 8];
         file.read_exact(&mut buffer)?;
-        let offset = u32::from_le_bytes(buffer);
-
-        file.read_exact(&mut buffer)?;
-        let size = u32::from_le_bytes(buffer);
+        let offset = u32::from_le_bytes(buffer[0..4].try_into().unwrap());
+        let size = u32::from_le_bytes(buffer[4..8].try_into().unwrap());
 
         // Skip trailing padding
         file.seek(SeekFrom::Current(8))?;
@@ -161,15 +158,10 @@ impl Arc {
 
         sanitize_name(&mut name);
 
-        let mut buffer = [0u8; 4];
-
-        // Offset is at 0x60 (96)
+        let mut buffer = [0u8; 8];
         file.read_exact(&mut buffer)?;
-        let offset = u32::from_le_bytes(buffer);
-
-        // Size is at 0x64 (100)
-        file.read_exact(&mut buffer)?;
-        let size = u32::from_le_bytes(buffer);
+        let offset = u32::from_le_bytes(buffer[0..4].try_into().unwrap());
+        let size = u32::from_le_bytes(buffer[4..8].try_into().unwrap());
 
         // Skip trailing 24 bytes padding (0x68..0x80)
         file.seek(SeekFrom::Current(24))?;

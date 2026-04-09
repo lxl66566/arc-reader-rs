@@ -1,10 +1,8 @@
 use std::{fs::File, io::Write, path::Path};
 
-use crate::{
-    decrypt::{hash_update, read16, read32, read8},
-    error::ArcResult,
-    write::write_rgba_to_png,
-};
+use bytes::Buf;
+
+use crate::{decrypt::hash_update, error::ArcResult, write::write_rgba_to_png};
 
 /// DSC 节点结构体
 #[derive(Debug, Clone)]
@@ -38,10 +36,10 @@ pub fn is_valid(data: &[u8], size: u32) -> bool {
 pub fn decrypt(crypted: &[u8], crypted_size: u32) -> ArcResult<(Vec<u8>, u32)> {
     let mut data_ptr = &crypted[16..];
 
-    let mut hash = read32(&mut data_ptr);
-    let size = read32(&mut data_ptr);
-    let _ = read32(&mut data_ptr); // v2
-    let _ = read32(&mut data_ptr); // padding
+    let mut hash = data_ptr.get_u32_le();
+    let size = data_ptr.get_u32_le();
+    let _ = data_ptr.get_u32_le(); // v2
+    let _ = data_ptr.get_u32_le(); // padding
 
     let mut nodes = vec![NodeDSC::new(); 1024];
 
@@ -180,24 +178,24 @@ fn dsc_is_image(data: &[u8]) -> bool {
     }
 
     let mut ptr = data;
-    let width = read16(&mut ptr);
+    let width = ptr.get_u16_le();
     if width == 0 || width > 8096 {
         return false;
     }
 
-    let height = read16(&mut ptr);
+    let height = ptr.get_u16_le();
     if height == 0 || height > 8096 {
         return false;
     }
 
-    let bpp = read8(&mut ptr);
+    let bpp = ptr.get_u8();
     if bpp != 8 && bpp != 24 && bpp != 32 {
         return false;
     }
 
     // 检查 11 个零字节
     for _ in 0..11 {
-        if read8(&mut ptr) != 0 {
+        if ptr.get_u8() != 0 {
             return false;
         }
     }
@@ -205,34 +203,30 @@ fn dsc_is_image(data: &[u8]) -> bool {
     true
 }
 
-/// 保存 DSC 数据，如果是图像则保存为 PNG，否则保存为原始文件
+/// Save DSC data, save as PNG if it's an image, otherwise save as raw file
 pub fn save(data: &[u8], size: u32, savepath: impl AsRef<Path>) -> ArcResult<()> {
     if size > 15 && dsc_is_image(data) {
         let mut data_ptr = data;
-        let width = read16(&mut data_ptr);
-        let height = read16(&mut data_ptr);
-        let bpp = read8(&mut data_ptr);
-        data_ptr = &data_ptr[11..]; // 跳过 11 个零字节
+        let width = data_ptr.get_u16_le();
+        let height = data_ptr.get_u16_le();
+        let bpp = data_ptr.get_u8();
+        data_ptr = &data_ptr[11..]; // Skip 11 zero bytes
 
-        let pixels: Vec<u8> = (0..height as usize * width as usize)
+        let total = height as usize * width as usize;
+        let pixels: Vec<u8> = (0..total)
             .flat_map(|_| {
                 let (r, g, b, a) = match bpp {
                     8 => {
-                        let v = read8(&mut data_ptr);
+                        let v = data_ptr.get_u8();
                         (v, v, v, 255)
                     }
                     32 => (
-                        read8(&mut data_ptr),
-                        read8(&mut data_ptr),
-                        read8(&mut data_ptr),
-                        read8(&mut data_ptr),
+                        data_ptr.get_u8(),
+                        data_ptr.get_u8(),
+                        data_ptr.get_u8(),
+                        data_ptr.get_u8(),
                     ),
-                    _ => (
-                        read8(&mut data_ptr),
-                        read8(&mut data_ptr),
-                        read8(&mut data_ptr),
-                        255,
-                    ),
+                    _ => (data_ptr.get_u8(), data_ptr.get_u8(), data_ptr.get_u8(), 255),
                 };
                 [r, g, b, a]
             })

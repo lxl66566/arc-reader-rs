@@ -5,13 +5,17 @@
 
 use std::{iter, path::Path};
 
+use bytes::Buf;
 use rayon::prelude::*;
 
 use crate::{
-    decrypt::{hash_update, read8, read16, read32},
+    decrypt::hash_update,
     error::{ArcError, ArcResult},
     write::write_rgba_to_png,
 };
+
+// Type aliases for better readability
+type DctCoefficients = [[f32; 64]; 2];
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -26,19 +30,19 @@ pub fn is_valid(data: &[u8], size: u32) -> bool {
 pub fn decrypt(crypted: &[u8]) -> ArcResult<(Vec<u8>, u16, u16)> {
     let mut ptr = &crypted[16..];
 
-    let width = read16(&mut ptr);
-    let height = read16(&mut ptr);
-    let bpp = read32(&mut ptr);
+    let width = ptr.get_u16_le();
+    let height = ptr.get_u16_le();
+    let bpp = ptr.get_u32_le();
 
-    let _ = read32(&mut ptr);
-    let _ = read32(&mut ptr);
+    let _ = ptr.get_u32_le();
+    let _ = ptr.get_u32_le();
 
-    let intermediate_length = read32(&mut ptr);
-    let key = read32(&mut ptr);
-    let enc_length = read32(&mut ptr);
-    let check_sum = read8(&mut ptr);
-    let check_xor = read8(&mut ptr);
-    let version = read16(&mut ptr);
+    let intermediate_length = ptr.get_u32_le();
+    let key = ptr.get_u32_le();
+    let enc_length = ptr.get_u32_le();
+    let check_sum = ptr.get_u8();
+    let check_xor = ptr.get_u8();
+    let version = ptr.get_u16_le();
 
     if version < 2 {
         decrypt_v1(
@@ -308,7 +312,7 @@ fn decrypt_v2(
 
     let mut offsets = Vec::with_capacity(y_blocks + 1);
     for _ in 0..=y_blocks {
-        let off = read32(&mut ptr) as isize;
+        let off = ptr.get_u32_le() as isize;
         offsets.push(off - input_base);
     }
 
@@ -381,7 +385,7 @@ fn decode_block(
     tree2: &HuffmanTree,
     width: usize,
     bpp: u32,
-    dct: &[[f32; 64]; 2],
+    dct: &DctCoefficients,
     output: &mut [u8],
     dst_start: usize,
 ) {
@@ -468,7 +472,7 @@ fn decode_block(
 fn decode_rgb(
     color_data: &[i16],
     width: usize,
-    dct: &[[f32; 64]; 2],
+    dct: &DctCoefficients,
     output: &mut [u8],
     dst_start: usize,
 ) {
@@ -522,7 +526,7 @@ fn decode_rgb(
 fn decode_grayscale(
     color_data: &[i16],
     width: usize,
-    dct: &[[f32; 64]; 2],
+    dct: &DctCoefficients,
     output: &mut [u8],
     mut dst_start: usize,
 ) {
@@ -565,7 +569,7 @@ fn decode_dct(
     channel: usize,
     data: &[i16],
     src: usize,
-    dct: &[[f32; 64]; 2],
+    dct: &DctCoefficients,
     tmp: &mut [[f32; 8]; 8],
     ycbr_block: &mut [[i16; 3]; 64],
 ) {
@@ -573,13 +577,13 @@ fn decode_dct(
 
     for i in 0..8 {
         // Check if all AC coefficients for this column are zero
-        let all_zero = data.get(src + 8 + i).copied().unwrap_or(0) == 0
-            && data.get(src + 16 + i).copied().unwrap_or(0) == 0
-            && data.get(src + 24 + i).copied().unwrap_or(0) == 0
-            && data.get(src + 32 + i).copied().unwrap_or(0) == 0
-            && data.get(src + 40 + i).copied().unwrap_or(0) == 0
-            && data.get(src + 48 + i).copied().unwrap_or(0) == 0
-            && data.get(src + 56 + i).copied().unwrap_or(0) == 0;
+        let all_zero = data.get(src + 8 + i) == Some(&0)
+            && data.get(src + 16 + i) == Some(&0)
+            && data.get(src + 24 + i) == Some(&0)
+            && data.get(src + 32 + i) == Some(&0)
+            && data.get(src + 40 + i) == Some(&0)
+            && data.get(src + 48 + i) == Some(&0)
+            && data.get(src + 56 + i) == Some(&0);
 
         if all_zero {
             let t = data.get(src + i).copied().unwrap_or(0) as f32 * dct[d][i];
@@ -680,7 +684,7 @@ fn decode_alpha(data: &[u8], width: usize, _height: usize, output: &mut [u8]) ->
     }
 
     let mut ptr = data;
-    let flag = read32(&mut ptr);
+    let flag = ptr.get_u32_le();
     if flag != 1 {
         return false;
     }
@@ -1075,7 +1079,7 @@ fn read_weight_table(ptr: &mut &[u8], count: usize) -> Vec<u32> {
 // ---------------------------------------------------------------------------
 // Utility functions
 // ---------------------------------------------------------------------------
-
+#[inline]
 fn float_to_short(f: f32) -> i16 {
     let a = 0x80 + (f as i32 >> 3);
     if a <= 0 {
@@ -1089,6 +1093,7 @@ fn float_to_short(f: f32) -> i16 {
     }
 }
 
+#[inline]
 fn float_to_byte(f: f32) -> u8 {
     if f >= 255.0 {
         0xFF
