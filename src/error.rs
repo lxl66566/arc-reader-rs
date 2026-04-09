@@ -22,13 +22,16 @@ pub enum ArcError {
     #[error("DSC解密失败")]
     DscDecryptError,
 
-    #[error("CBG解密失败")]
+    #[error("CBG decryption failed")]
     CbgDecryptError,
 
-    #[error("PNG文件处理失败")]
+    #[error("Unsupported CBG version: {0}")]
+    CbgUnsupportedVersion(u16),
+
+    #[error("PNG encoding failed")]
     PngProcessError,
 
-    #[error("暂不支持的文件类型: {0}")]
+    #[error("Unsupported file type: {0}")]
     UnsupportedFileType(String),
 }
 

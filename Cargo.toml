@@ -10,6 +10,7 @@ lewton            = "0.10.2"
 log               = "0.4"
 png               = "0.18"
 pretty_env_logger = "0.5"
+rayon             = "1.10"
 thiserror         = "2.0"
 
 [dev-dependencies]

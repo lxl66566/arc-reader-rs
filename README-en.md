@@ -2,19 +2,21 @@
 
 [简体中文](./README.md) | English
 
-This is a Rust implementation of [minirop/arc-reader](https://github.com/minirop/arc-reader), used for reading and extracting .arc files from the BGI engine (OverDrive/MangaGamer). This project is ported from the C version of arc-reader, retaining as much of the original project's functionality and structure as possible while leveraging Rust's ease of building and static linking features.
+This is a Rust port of [minirop/arc-reader](https://github.com/minirop/arc-reader) with improvements, used for reading and extracting .arc files from the BGI engine (OverDrive/MangaGamer).
 
-Additionally, this project includes extra support for unpacking and repacking `.ogg` audio files. Other formats are not yet supported, and PRs are welcome.
-
-The main contributor to this project is claude-3.7, and we extend our gratitude for their significant support.
+Additionally, this project includes extra support for unpacking and repacking `.ogg` audio files.
 
 ## Features
 
-- Unpack .arc files
+- Unpack .arc files (V1 and V2 formats supported)
+- Pack .arc files (currently only OGG audio packing)
 - Decrypt BSE format files (only the first 64 bytes are encrypted)
-- Decrypt and save `CompressedBG___` format files as PNG
+- Decrypt and save `CompressedBG___` format files as PNG (V1 and V2)
+  - V1: Huffman + zero-run + reverse average sampling
+  - V2: DCT + Huffman + YCbCr→RGB (8/24/32bpp with alpha channel decoding) + parallel block decoding
 - Decrypt and save "DSC FORMAT 1.00" files as PNG or raw format
-- Support for both V1 and V2 ARC file formats
+- Decrypt and save BGI uncompressed image format as PNG
+- Unpack and repack `.ogg` audio files (including BGI header)
 
 ## Usage
 
@@ -29,13 +31,14 @@ Run `arc-reader -h` for detailed information.
 
 ## Tested on
 
-Passed the test on .arc files of the following games (only tested on audio arcs):
+Passed the test on .arc files of the following games:
 
 - 千の刃涛、桃花染の皇姫
 - ジュエリー・ハーツ・アカデミア -We will wing wonder world-
 - 大図書館の羊飼い (arc version 1)
 - 大図書館の羊飼い -Dreaming Sheep-
 
-## LICENSE
+## Thanks
 
-The [original project's LICENSE](./licence.txt) is retained.
+- [minirop/arc-reader](https://github.com/minirop/arc-reader) for the original C implementation
+- [GARbro](https://github.com/nanami5270/GARbro-Mod) for the arc V2 format implementation

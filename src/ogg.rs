@@ -8,12 +8,22 @@ use lewton::inside_ogg::OggStreamReader;
 
 use crate::error::ArcResult;
 
-/// 判断是否为 OGG 文件（带有 headers）
+/// Check whether this looks like a BGI-wrapped OGG/Vorbis file (bw header +
+/// OggS).
 pub fn is_valid(data: &[u8]) -> bool {
-    if data.len() < 68 {
+    if data.len() < 8 {
         return false;
     }
-    &data[64..68] == b"OggS"
+    // Must have "bw  " at offset 4 (BGI audio signature)
+    if data.len() < 8 || &data[4..8] != b"bw  " {
+        return false;
+    }
+    // Read the Ogg data offset from the first 4 bytes
+    let offset = u32::from_le_bytes(data[0..4].try_into().unwrap()) as usize;
+    if offset >= data.len() || offset + 4 > data.len() {
+        return false;
+    }
+    &data[offset..offset + 4] == b"OggS"
 }
 
 /// 判断是否为 OGG 文件（不带有 headers）
@@ -23,8 +33,9 @@ pub fn is_ogg(data: &[u8]) -> bool {
 
 pub fn remove_header(data: Vec<u8>) -> Vec<u8> {
     assert!(is_valid(&data));
-    // 返回从第 64 字节开始的所有数据
-    data[64..].to_vec()
+    // Read the Ogg data offset from the first 4 bytes (matches GARBro's AudioBGI)
+    let offset = u32::from_le_bytes(data[0..4].try_into().unwrap()) as usize;
+    data[offset..].to_vec()
 }
 
 pub fn add_header(data: Vec<u8>) -> Vec<u8> {
