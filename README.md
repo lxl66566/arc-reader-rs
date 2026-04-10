@@ -31,15 +31,16 @@ arc-reader pack <INPUT_DIR> [OUTPUT_FILE] [-v <version>]
 
 ## 测试
 
-下列游戏的 .arc 存档已通过测试。
+通过解包测试：
 
-- `data04` 开头的音频存档：
-  - 千の刃涛、桃花染の皇姫
-  - ジュエリー・ハーツ・アカデミア -We will wing wonder world-
-  - 大図書館の羊飼い <span style="color: gray;">_(arc version 1)_</span>
-  - 大図書館の羊飼い -Dreaming Sheep-
-- `data02` 开头的图像存档：
-  - ジュエリー・ハーツ・アカデミア -We will wing wonder world-
+<!-- prettier-ignore -->
+| 游戏名 | Arc 包 | 测试软件版本 |
+| --- | --- | --- |
+| 千の刃涛、桃花染の皇姫 | data04\* | v0.2.x |
+| ジュエリー・ハーツ・アカデミア -We will wing wonder world- | data04\*<br/>data02\* | v0.3.0 |
+| 大図書館の羊飼い | data04\* (arc version 1) | v0.2.x |
+| 大図書館の羊飼い -Dreaming Sheep- | data04\* | v0.2.x |
+| 素晴らしき日々15th | data04\*<br/>data02\* | v0.3.0 |
 
 ## Thanks
 

@@ -31,12 +31,16 @@ Run `arc-reader -h` for detailed information.
 
 ## Tested on
 
-Passed the test on .arc files of the following games:
+Passed the unpack test:
 
-- 千の刃涛、桃花染の皇姫
-- ジュエリー・ハーツ・アカデミア -We will wing wonder world-
-- 大図書館の羊飼い (arc version 1)
-- 大図書館の羊飼い -Dreaming Sheep-
+<!-- prettier-ignore -->
+| Game | Arc | Software Version |
+| --- | --- | --- |
+| 千の刃涛、桃花染の皇姫 | data04\* | v0.2.x |
+| ジュエリー・ハーツ・アカデミア -We will wing wonder world- | data04\*<br/>data02\* | v0.3.0 |
+| 大図書館の羊飼い | data04\* (arc version 1) | v0.2.x |
+| 大図書館の羊飼い -Dreaming Sheep- | data04\* | v0.2.x |
+| 素晴らしき日々15th | data04\*<br/>data02\* | v0.3.0 |
 
 ## Thanks
 
