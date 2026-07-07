@@ -9,11 +9,12 @@
 ## 功能
 
 - 解包 .arc 文件（支持 V1 和 V2 版本）
-- 封包 .arc 文件（目前仅支持 OGG 音频封包）
+- 封包 .arc 文件（支持 OGG 音频与 PNG 图片）
 - 解密 BSE 格式文件（仅前 64 字节加密）
 - 解密并保存 `CompressedBG___` 格式文件为 PNG（支持 V1 和 V2 版本）
   - V1：Huffman + 零行程 + 反向平均采样
   - V2：DCT + Huffman + YCbCr→RGB（支持 8/24/32bpp，含 Alpha 通道解码）+ 并行块解码
+- 封包 PNG 图片为 `CompressedBG` V1 格式（Huffman 压缩），或退化为 BGI 无压缩格式
 - 解密并保存 "DSC FORMAT 1.00" 格式文件为 PNG 或原始格式
 - 解密并保存 BGI 未压缩图像格式为 PNG
 - 解包/封包 `.ogg` 音频文件（包含 BGI 音频头部）

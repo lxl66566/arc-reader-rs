@@ -4,16 +4,17 @@
 
 This is a Rust port of [minirop/arc-reader](https://github.com/minirop/arc-reader) with improvements, used for reading and extracting .arc files from the BGI engine (OverDrive/MangaGamer).
 
-Additionally, this project includes extra support for unpacking and repacking `.ogg` audio files.
+Additionally, this project includes extra support for unpacking and repacking `.ogg` audio files and PNG images.
 
 ## Features
 
 - Unpack .arc files (V1 and V2 formats supported)
-- Pack .arc files (currently only OGG audio packing)
+- Pack .arc files (OGG audio and PNG images)
 - Decrypt BSE format files (only the first 64 bytes are encrypted)
 - Decrypt and save `CompressedBG___` format files as PNG (V1 and V2)
   - V1: Huffman + zero-run + reverse average sampling
   - V2: DCT + Huffman + YCbCr→RGB (8/24/32bpp with alpha channel decoding) + parallel block decoding
+- Pack PNG images into `CompressedBG` V1 format (Huffman compressed), with BGI uncompressed fallback
 - Decrypt and save "DSC FORMAT 1.00" files as PNG or raw format
 - Decrypt and save BGI uncompressed image format as PNG
 - Unpack and repack `.ogg` audio files (including BGI header)

@@ -894,6 +894,40 @@ impl HuffmanTree {
         }
         idx as i32
     }
+
+    /// Walk the tree and record the MSB-first code `(value, bit_length)` for
+    /// every leaf. Byte values absent from the tree keep `(0, 0)`.
+    fn generate_codes(&self) -> [(u32, u32); 256] {
+        let mut codes = [(0u32, 0u32); 256];
+        if self.nodes.is_empty() {
+            return codes;
+        }
+        let root = self.nodes.len() - 1;
+        Self::traverse_codes(&self.nodes, root, 0, 0, &mut codes);
+        codes
+    }
+
+    fn traverse_codes(
+        nodes: &[HuffmanNode],
+        idx: usize,
+        code: u32,
+        depth: u32,
+        codes: &mut [(u32, u32); 256],
+    ) {
+        let node = &nodes[idx];
+        if !node.is_parent {
+            if idx < 256 {
+                codes[idx] = (code, depth.max(1));
+            }
+            return;
+        }
+        if node.left != usize::MAX {
+            Self::traverse_codes(nodes, node.left, code << 1, depth + 1, codes);
+        }
+        if node.right != usize::MAX {
+            Self::traverse_codes(nodes, node.right, (code << 1) | 1, depth + 1, codes);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1130,3 +1164,300 @@ const BLOCK_FILL_ORDER: [usize; 64] = [
     13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59,
     52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63,
 ];
+
+// ===========================================================================
+// Encoding (PNG → CompressedBG V1)
+// ===========================================================================
+
+/// Encode RGBA pixels into a `CompressedBG` V1 image buffer.
+///
+/// Pipeline (inverse of [`decrypt_v1`]):
+/// 1. RGBA → BGR(A) raw pixels
+/// 2. Forward average sampling (subtract predicted neighbor average)
+/// 3. Pack into literal/zero-run segments (simple all-literal variant)
+/// 4. Huffman-compress using byte frequencies as weights
+/// 5. Encrypt the weight table with the BGI key stream
+pub fn encode_cbg_v1(rgba: &[u8], width: u16, height: u16, has_alpha: bool) -> ArcResult<Vec<u8>> {
+    if width == 0 || height == 0 {
+        return Err(ArcError::CbgDecryptError);
+    }
+
+    let bpp: u32 = if has_alpha { 32 } else { 24 };
+    let pixel_size = (bpp / 8) as usize;
+    let w = width as usize;
+    let h = height as usize;
+
+    // --- Step 1: RGBA → BGR(A) ---
+    let raw = rgba_to_bgr(rgba, w, h, pixel_size);
+
+    // --- Step 2: Forward average sampling ---
+    let residual = forward_average_sampling(&raw, w, h, pixel_size);
+
+    // --- Step 3: Pack zeros (all-literal: single literal run covering everything)
+    // ---
+    let mut intermediate = Vec::with_capacity(5 + residual.len());
+    write_variable(&mut intermediate, residual.len() as u32);
+    intermediate.extend_from_slice(&residual);
+    let intermediate_length = intermediate.len() as u32;
+
+    // --- Step 4: Huffman-compress ---
+    let mut freq = [0u32; 256];
+    for &b in &intermediate {
+        freq[b as usize] += 1;
+    }
+    let tree = HuffmanTree::new_v1(&freq);
+    let codes = tree.generate_codes();
+
+    // Guard against pathological code lengths that overflow u32.
+    if freq
+        .iter()
+        .enumerate()
+        .any(|(i, &f)| f > 0 && codes[i].1 >= 32)
+    {
+        return Err(ArcError::CbgDecryptError);
+    }
+
+    let mut writer = MsbBitWriter::new();
+    for &b in &intermediate {
+        let (code, len) = codes[b as usize];
+        writer.write_bits(code, len);
+    }
+    let compressed = writer.finish();
+
+    // --- Step 5: Encrypt weight table ---
+    let mut weight_bytes = Vec::with_capacity(256 * 2);
+    for &w in &freq {
+        write_variable(&mut weight_bytes, w);
+    }
+
+    let key = 0u32;
+    let (enc_data, check_sum, check_xor) = encrypt_block(&weight_bytes, key);
+    let enc_length = enc_data.len() as u32;
+
+    // --- Assemble the CBG V1 file ---
+    let mut output = Vec::with_capacity(0x30 + enc_data.len() + compressed.len());
+    // Magic is 15 bytes ("CompressedBG___"), followed by one padding byte so
+    // that the structured header fields begin at offset 0x10.
+    output.extend_from_slice(b"CompressedBG___");
+    output.push(0);
+    output.extend_from_slice(&width.to_le_bytes());
+    output.extend_from_slice(&height.to_le_bytes());
+    output.extend_from_slice(&bpp.to_le_bytes());
+    output.extend_from_slice(&0u32.to_le_bytes()); // reserved
+    output.extend_from_slice(&0u32.to_le_bytes()); // reserved
+    output.extend_from_slice(&intermediate_length.to_le_bytes());
+    output.extend_from_slice(&key.to_le_bytes());
+    output.extend_from_slice(&enc_length.to_le_bytes());
+    output.push(check_sum);
+    output.push(check_xor);
+    output.extend_from_slice(&1u16.to_le_bytes()); // version = 1
+    output.extend_from_slice(&enc_data);
+    output.extend_from_slice(&compressed);
+
+    Ok(output)
+}
+
+// --- Encoding helpers ---
+
+/// Convert RGBA pixels to interleaved BGR(A) byte order.
+fn rgba_to_bgr(rgba: &[u8], width: usize, height: usize, pixel_size: usize) -> Vec<u8> {
+    let total = width * height;
+    let mut out = vec![0u8; total * pixel_size];
+    for i in 0..total {
+        let src = i * 4;
+        let dst = i * pixel_size;
+        out[dst] = rgba[src + 2]; // B
+        out[dst + 1] = rgba[src + 1]; // G
+        out[dst + 2] = rgba[src]; // R
+        if pixel_size == 4 {
+            out[dst + 3] = rgba[src + 3]; // A
+        }
+    }
+    out
+}
+
+/// Forward average-prediction: subtract the predicted neighbor average from
+/// each byte. This is the exact inverse of [`reverse_average_sampling`].
+///
+/// Reads from `input` (original pixels) and writes residuals to the output so
+/// that the decoder can apply [`reverse_average_sampling`] in-place.
+fn forward_average_sampling(
+    input: &[u8],
+    width: usize,
+    height: usize,
+    pixel_size: usize,
+) -> Vec<u8> {
+    let stride = width * pixel_size;
+    let mut output = vec![0u8; input.len()];
+
+    for y in 0..height {
+        for x in 0..width {
+            for p in 0..pixel_size {
+                let idx = y * stride + x * pixel_size + p;
+                let mut avg: i32 = 0;
+                if x > 0 {
+                    avg += i32::from(input[idx - pixel_size]);
+                }
+                if y > 0 {
+                    avg += i32::from(input[idx - stride]);
+                }
+                if x > 0 && y > 0 {
+                    avg /= 2;
+                }
+                output[idx] = if avg != 0 {
+                    input[idx].wrapping_sub(avg as u8)
+                } else {
+                    input[idx]
+                };
+            }
+        }
+    }
+
+    output
+}
+
+/// Encode a value as an LEB128-style variable-length integer (matches
+/// [`read_variable`] / [`read_variable_from_slice`]).
+fn write_variable(buf: &mut Vec<u8>, mut v: u32) {
+    loop {
+        let byte = (v & 0x7F) as u8;
+        v >>= 7;
+        if v != 0 {
+            buf.push(byte | 0x80);
+        } else {
+            buf.push(byte);
+            break;
+        }
+    }
+}
+
+/// Encrypt a plaintext block with the BGI key stream, producing the ciphertext
+/// and the checksum / xor values the decoder expects in the header.
+///
+/// `cipher[i] = plain[i] + hash_update(key) & 0xFF`  (wrapping add)
+fn encrypt_block(plain: &[u8], key_init: u32) -> (Vec<u8>, u8, u8) {
+    let mut key = key_init;
+    let mut cipher = vec![0u8; plain.len()];
+    let mut sum: u8 = 0;
+    let mut xor: u8 = 0;
+
+    for (i, byte) in cipher.iter_mut().enumerate() {
+        let k = (hash_update(&mut key) & 0xFF) as u8;
+        *byte = plain[i].wrapping_add(k);
+        sum = sum.wrapping_add(plain[i]);
+        xor ^= plain[i];
+    }
+
+    (cipher, sum, xor)
+}
+
+/// MSB-first bit writer — the inverse of [`MsbBitStream`] /
+/// [`MsbBitStreamCursor`].
+struct MsbBitWriter {
+    data: Vec<u8>,
+    cache: u32,
+    cache_size: u32,
+}
+
+impl MsbBitWriter {
+    fn new() -> Self {
+        Self {
+            data: Vec::new(),
+            cache: 0,
+            cache_size: 0,
+        }
+    }
+
+    /// Write the low `len` bits of `code`, most-significant bit first.
+    fn write_bits(&mut self, code: u32, len: u32) {
+        for i in (0..len).rev() {
+            let bit = (code >> i) & 1;
+            self.cache = (self.cache << 1) | bit;
+            self.cache_size += 1;
+            if self.cache_size == 8 {
+                self.data.push(self.cache as u8);
+                self.cache = 0;
+                self.cache_size = 0;
+            }
+        }
+    }
+
+    /// Flush any remaining partial byte (zero-padded on the right).
+    fn finish(mut self) -> Vec<u8> {
+        if self.cache_size > 0 {
+            self.cache <<= 8 - self.cache_size;
+            self.data.push(self.cache as u8);
+        }
+        self.data
+    }
+}
+
+#[cfg(test)]
+mod encode_tests {
+    use super::*;
+
+    /// Build a small synthetic RGBA image and verify that
+    /// `encode_cbg_v1 → decrypt_cbg` round-trips back to the original pixels.
+    #[test]
+    fn test_cbg_v1_round_trip() {
+        let width = 32u16;
+        let height = 24u16;
+        let total = usize::from(width) * usize::from(height);
+
+        // Create a gradient pattern with some variation per channel
+        let rgba: Vec<u8> = (0..total)
+            .flat_map(|i| {
+                let r = ((i * 7) % 256) as u8;
+                let g = ((i * 13 + 50) % 256) as u8;
+                let b = ((i * 3 + 100) % 256) as u8;
+                [r, g, b, 0xFF]
+            })
+            .collect();
+
+        let encoded = encode_cbg_v1(&rgba, width, height, false).unwrap();
+        assert!(is_cbg(&encoded));
+
+        let (decoded, dw, dh) = decrypt_cbg(&encoded).unwrap();
+        assert_eq!(dw, width);
+        assert_eq!(dh, height);
+        assert_eq!(decoded, rgba);
+    }
+
+    /// Test with an image that has transparency (32 bpp).
+    #[test]
+    fn test_cbg_v1_round_trip_alpha() {
+        let width = 16u16;
+        let height = 16u16;
+        let total = usize::from(width) * usize::from(height);
+
+        let rgba: Vec<u8> = (0..total)
+            .flat_map(|i| {
+                let r = ((i * 5) % 256) as u8;
+                let g = ((i * 11) % 256) as u8;
+                let b = ((i * 17) % 256) as u8;
+                let a = if i % 3 == 0 { 0x80 } else { 0xFF };
+                [r, g, b, a]
+            })
+            .collect();
+
+        let encoded = encode_cbg_v1(&rgba, width, height, true).unwrap();
+        let (decoded, _, _) = decrypt_cbg(&encoded).unwrap();
+        assert_eq!(decoded, rgba);
+    }
+
+    /// Test that variable-length encoding round-trips correctly.
+    #[test]
+    fn test_write_variable() {
+        let values = [
+            0u32, 1, 127, 128, 255, 256, 16383, 16384, 65535, 65536, 0xFFFFFFFF,
+        ];
+        for &v in &values {
+            let mut buf = Vec::new();
+            write_variable(&mut buf, v);
+            let mut slice: &[u8] = &buf;
+            let decoded = read_variable(&mut slice);
+            assert_eq!(decoded, v, "value {v} did not round-trip: {buf:02X?}");
+            assert!(slice.is_empty(), "trailing bytes for value {v}");
+        }
+    }
+}

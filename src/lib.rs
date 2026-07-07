@@ -21,6 +21,38 @@ use crate::{
     error::{ArcError, ArcResult},
 };
 
+/// Check whether the data starts with a PNG magic signature.
+fn is_png(data: &[u8]) -> bool {
+    data.starts_with(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+}
+
+/// Encode a single file for inclusion in an ARC archive.
+///
+/// - **OGG** → BGI-wrapped audio (`bw  ` header)
+/// - **PNG** → CBG V1 compressed image, falling back to BGI uncompressed on the
+///   rare occasion that Huffman code lengths are pathological.
+fn encode_for_pack(data: &[u8]) -> ArcResult<Vec<u8>> {
+    if ogg::is_ogg(data) {
+        Ok(ogg::add_header(data))
+    } else if is_png(data) {
+        let img = write::read_png(data)?;
+        match cbg::encode_cbg_v1(&img.rgba, img.width, img.height, img.has_alpha) {
+            Ok(cbg_data) => Ok(cbg_data),
+            Err(e) => {
+                debug!("CBG V1 encode failed ({e:?}), falling back to BGI uncompressed");
+                Ok(bgi::encode_bgi(
+                    &img.rgba,
+                    img.width,
+                    img.height,
+                    img.has_alpha,
+                ))
+            }
+        }
+    } else {
+        Err(ArcError::UnsupportedFileType("unknown format".to_string()))
+    }
+}
+
 /// Decode a single file extracted from an ARC archive.
 ///
 /// Automatically detects and handles:
@@ -156,13 +188,7 @@ pub fn pack_arc(
 
         let mut data = fs::read(&path)?;
 
-        // Only OGG files are supported for packing
-        if ogg::is_ogg(&data) {
-            data = ogg::add_header(&data);
-        } else {
-            error!("Unsupported file type: {}", path.display());
-            return Err(ArcError::UnsupportedFileType(path.display().to_string()));
-        }
+        data = encode_for_pack(&data)?;
 
         files.push((file_name, data));
     }
@@ -212,4 +238,128 @@ fn write_filename(
     let copy_len = file_name.len().min(name_len_limit);
     name_bytes[..copy_len].copy_from_slice(&file_name.as_bytes()[..copy_len]);
     arc_file.write_all(&name_bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Encode RGBA as an in-memory PNG file (for testing the full pipeline).
+    fn make_png(rgba: &[u8], width: u32, height: u32) -> Vec<u8> {
+        let mut buf = Vec::new();
+        let w = std::io::BufWriter::new(&mut buf);
+        let mut enc = png::Encoder::new(w, width, height);
+        enc.set_color(png::ColorType::Rgba);
+        enc.set_depth(png::BitDepth::Eight);
+        let mut writer = enc.write_header().unwrap();
+        writer.write_image_data(rgba).unwrap();
+        drop(writer);
+        buf
+    }
+
+    /// Full pipeline: PNG → encode_for_pack → decode_file → compare RGBA
+    /// pixels.
+    fn assert_round_trip(rgba: &[u8], width: u16, height: u16, _has_alpha: bool) {
+        let png_data = make_png(rgba, width as u32, height as u32);
+        assert!(is_png(&png_data));
+
+        let encoded = encode_for_pack(&png_data).unwrap();
+
+        // decode_file writes to disk; test the decoder directly instead.
+        let tmp = tempfile::tempdir().unwrap();
+        let out = tmp.path().join("output.png");
+        decode_file(&encoded, &out).unwrap();
+
+        let decoded_png = std::fs::read(&out).unwrap();
+        let img = write::read_png(&decoded_png).unwrap();
+        assert_eq!(img.width, width);
+        assert_eq!(img.height, height);
+        assert_eq!(img.rgba, rgba);
+    }
+
+    #[test]
+    fn test_png_cbg_v1_pipeline() {
+        let (w, h) = (40u16, 30u16);
+        let total = usize::from(w) * usize::from(h);
+        let rgba: Vec<u8> = (0..total)
+            .flat_map(|i| {
+                [
+                    ((i * 7) % 256) as u8,
+                    ((i * 13 + 50) % 256) as u8,
+                    ((i * 3 + 100) % 256) as u8,
+                    0xFF,
+                ]
+            })
+            .collect();
+        assert_round_trip(&rgba, w, h, false);
+    }
+
+    #[test]
+    fn test_png_bgi_pipeline() {
+        // Force BGI path by encoding directly
+        let (w, h) = (16u16, 12u16);
+        let total = usize::from(w) * usize::from(h);
+        let rgba: Vec<u8> = (0..total)
+            .flat_map(|i| {
+                [
+                    (i % 256) as u8,
+                    ((i * 5) % 256) as u8,
+                    ((i * 9) % 256) as u8,
+                    0xFF,
+                ]
+            })
+            .collect();
+
+        let encoded = bgi::encode_bgi(&rgba, w, h, false);
+        assert!(bgi::is_bgi(&encoded));
+
+        let tmp = tempfile::tempdir().unwrap();
+        let out = tmp.path().join("bgi_test.png");
+        decode_file(&encoded, &out).unwrap();
+
+        let decoded = std::fs::read(&out).unwrap();
+        let img = write::read_png(&decoded).unwrap();
+        assert_eq!(img.rgba, rgba);
+    }
+
+    #[test]
+    fn test_pack_unpack_arc_with_image() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+
+        let input_dir = base.join("input");
+        std::fs::create_dir_all(&input_dir).unwrap();
+
+        // Create a test PNG
+        let (w, h) = (24u16, 24u16);
+        let total = usize::from(w) * usize::from(h);
+        let rgba: Vec<u8> = (0..total)
+            .flat_map(|i| {
+                [
+                    ((i * 11) % 256) as u8,
+                    ((i * 7) % 256) as u8,
+                    ((i * 3) % 256) as u8,
+                    0xFF,
+                ]
+            })
+            .collect();
+        let png_data = make_png(&rgba, w as u32, h as u32);
+        std::fs::write(input_dir.join("test.png"), &png_data).unwrap();
+
+        // Pack
+        let arc_path = base.join("test.arc");
+        pack_arc(&input_dir, &arc_path, ArcVersion::V2).unwrap();
+
+        // Unpack
+        let output_dir = base.join("output");
+        let results = unpack_arc(&arc_path, &output_dir).unwrap();
+        assert!(results.iter().all(|(_, r)| r.is_ok()));
+
+        // Verify the decoded PNG
+        let decoded_png = std::fs::read(output_dir.join("test.png")).unwrap();
+        let img = write::read_png(&decoded_png).unwrap();
+        assert_eq!(img.width, w);
+        assert_eq!(img.height, h);
+        assert_eq!(img.rgba, rgba);
+    }
 }
