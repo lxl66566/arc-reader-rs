@@ -6,6 +6,7 @@
 use std::path::Path;
 
 use bytes::Buf;
+use log::debug;
 use memchr::memchr;
 
 use crate::{error::ArcResult, write::write_rgba_to_png};
@@ -53,6 +54,8 @@ pub fn decrypt_bgi(data: &[u8]) -> ArcResult<(Vec<u8>, u16, u16)> {
     let height = ptr.get_u16_le();
     let bpp = u32::from(ptr.get_u16_le());
     let flag = u32::from(ptr.get_u16_le());
+
+    debug!("BGI: {width}x{height} {bpp}bpp flag={flag}");
 
     let pixel_size = (bpp / 8) as usize;
     let stride = width as usize * pixel_size;

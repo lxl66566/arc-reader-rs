@@ -36,7 +36,6 @@ pub fn decode_file(data: &[u8], output_path: impl AsRef<Path>) -> ArcResult<()> 
     // After stripping the 0x10-byte BSE metadata, the inner payload is:
     //   decrypted_header (0x40 bytes) + body (rest)
     let bse_data = if bse::is_bse(data) {
-        debug!("BSE...");
         let mut payload = data.to_vec();
         bse::decrypt_bse(&mut payload)?;
         payload[0x10..].to_vec()
@@ -49,11 +48,9 @@ pub fn decode_file(data: &[u8], output_path: impl AsRef<Path>) -> ArcResult<()> 
         let (decrypted, size) = dsc::decrypt_dsc(&bse_data)?;
         dsc::save(&decrypted, size, output_path)?;
     } else if cbg::is_cbg(&bse_data) {
-        debug!("CBG...");
         let (decrypted, w, h) = cbg::decrypt_cbg(&bse_data)?;
         cbg::save(&decrypted, w, h, output_path)?;
     } else if bgi::is_bgi(&bse_data) {
-        debug!("BGI...");
         let (decrypted, w, h) = bgi::decrypt_bgi(&bse_data)?;
         bgi::save(&decrypted, w, h, output_path)?;
     } else if ogg::is_bgi_ogg(&bse_data) {

@@ -6,6 +6,7 @@
 use std::{iter, path::Path};
 
 use bytes::Buf;
+use log::debug;
 use rayon::prelude::*;
 
 use crate::{
@@ -44,6 +45,8 @@ pub fn decrypt_cbg(crypted: &[u8]) -> ArcResult<(Vec<u8>, u16, u16)> {
     let check_sum = ptr.get_u8();
     let check_xor = ptr.get_u8();
     let version = ptr.get_u16_le();
+
+    debug!("CBG v{version}: {width}x{height} {bpp}bpp");
 
     if version < 2 {
         decrypt_v1(

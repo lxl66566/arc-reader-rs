@@ -2,6 +2,7 @@
 //!
 //! Supports BSE 1.0 and BSE 1.1, matching `GARBro`'s ArcBGI.cs implementation.
 
+use log::debug;
 use smallvec::SmallVec;
 
 use crate::error::{ArcError, ArcResult};
@@ -26,6 +27,8 @@ pub fn decrypt_bse(data: &mut [u8]) -> ArcResult<()> {
     if version != 0x100 && version != 0x101 {
         return Err(ArcError::BseDecryptError);
     }
+
+    debug!("BSE {}.{}", version >> 8, version & 0xFF);
 
     // Read header fields
     let _ = read16_from(data, 0x08); // version (already read above)
