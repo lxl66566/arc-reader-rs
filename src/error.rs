@@ -28,8 +28,14 @@ pub enum ArcError {
     #[error("Unsupported CBG version: {0}")]
     CbgUnsupportedVersion(u16),
 
-    #[error("PNG encoding failed")]
-    PngProcessError,
+    #[error("PNG encoding failed: {0}")]
+    PngEncodeError(#[from] png::EncodingError),
+
+    #[error("PNG decoding failed: {0}")]
+    PngDecodeError(#[from] png::DecodingError),
+
+    #[error("PNG format unsupported: {0}")]
+    PngUnsupported(&'static str),
 
     #[error("Unsupported file type: {0}")]
     UnsupportedFileType(String),

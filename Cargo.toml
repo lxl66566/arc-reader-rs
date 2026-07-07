@@ -19,10 +19,8 @@ default = []
 bytes     = "1.12"
 lewton    = "0.10.2"
 log       = "0.4"
-memchr    = "2.8"
 png       = "0.18"
 rayon     = "1.12"
-smallvec  = "1.15"
 thiserror = "2.0"
 
 clap              = { version = "4.6", features = ["derive"], optional = true }

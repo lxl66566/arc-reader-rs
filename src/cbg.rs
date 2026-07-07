@@ -3,7 +3,22 @@
 //! Supports both V1 (Huffman + delta prediction) and V2 (DCT + Huffman)
 //! decoding, ported from `GARBro`'s ImageCBG.cs implementation.
 
-use std::{iter, path::Path};
+// This module is ported from C# (GARBro). Integer casts, magic constants and
+// verbose variable names mirror the original implementation for auditability.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::cast_lossless,
+    clippy::unreadable_literal,
+    clippy::too_many_arguments,
+    clippy::needless_range_loop,
+    clippy::excessive_precision,
+    clippy::similar_names,
+    clippy::many_single_char_names
+)]
+
+use std::path::Path;
 
 use bytes::Buf;
 use log::debug;
@@ -12,7 +27,7 @@ use rayon::prelude::*;
 use crate::{
     decrypt::hash_update,
     error::{ArcError, ArcResult},
-    write::write_rgba_to_png,
+    write::{convert_bgr_to_rgba, write_rgba_to_png},
 };
 
 // Type aliases for better readability
@@ -48,8 +63,8 @@ pub fn decrypt_cbg(crypted: &[u8]) -> ArcResult<(Vec<u8>, u16, u16)> {
 
     debug!("CBG v{version}: {width}x{height} {bpp}bpp");
 
-    if version < 2 {
-        decrypt_v1(
+    match version {
+        0 | 1 => decrypt_v1(
             crypted,
             width,
             height,
@@ -59,13 +74,11 @@ pub fn decrypt_cbg(crypted: &[u8]) -> ArcResult<(Vec<u8>, u16, u16)> {
             enc_length,
             check_sum,
             check_xor,
-        )
-    } else if version == 2 {
-        decrypt_v2(
+        ),
+        2 => decrypt_v2(
             crypted, width, height, bpp, key, enc_length, check_sum, check_xor,
-        )
-    } else {
-        Err(ArcError::CbgUnsupportedVersion(version))
+        ),
+        _ => Err(ArcError::CbgUnsupportedVersion(version)),
     }
 }
 
@@ -120,7 +133,7 @@ fn decrypt_v1(
     reverse_average_sampling(&mut output, width as usize, height as usize, pixel_size);
 
     // --- Step 6: Convert to RGBA pixels ---
-    let pixels = convert_to_rgba(&output, width as usize, height as usize, bpp);
+    let pixels = convert_bgr_to_rgba(&output, width as usize, height as usize, bpp);
 
     Ok((pixels, width, height))
 }
@@ -213,46 +226,6 @@ fn reverse_average_sampling(output: &mut [u8], width: usize, height: usize, pixe
     }
 }
 
-/// Convert raw pixel data (BGR/BGRA/Gray) to RGBA.
-fn convert_to_rgba(data: &[u8], width: usize, height: usize, bpp: u32) -> Vec<u8> {
-    let pixel_size = (bpp / 8) as usize;
-    let total = width * height;
-    let mut rgba = Vec::with_capacity(total * 4);
-    let mut src = 0usize;
-
-    for _ in 0..total {
-        match bpp {
-            32 => {
-                let b = data[src];
-                let g = data[src + 1];
-                let r = data[src + 2];
-                let a = data[src + 3];
-                rgba.extend_from_slice(&[r, g, b, a]);
-            }
-            24 => {
-                let b = data[src];
-                let g = data[src + 1];
-                let r = data[src + 2];
-                rgba.extend_from_slice(&[r, g, b, 0xFF]);
-            }
-            8 => {
-                let v = data[src];
-                rgba.extend_from_slice(&[v, v, v, 0xFF]);
-            }
-            _ => {
-                // Fallback: copy raw bytes + 0xFF alpha
-                for p in 0..pixel_size {
-                    rgba.push(data[src + p]);
-                }
-                rgba.extend(iter::repeat_n(0xFF, 4 - pixel_size));
-            }
-        }
-        src += pixel_size;
-    }
-
-    rgba
-}
-
 // ---------------------------------------------------------------------------
 // V2 decoder (DCT + Huffman, ported from GARBro's ParallelCbgDecoder)
 // ---------------------------------------------------------------------------
@@ -326,7 +299,7 @@ fn decrypt_v2(
     let pad_skip = ((w_align >> 3) + 7) >> 3;
     let mut output = vec![0u8; w_align * h_align * 4];
 
-    let block_params: Vec<(usize, usize, usize)> = (0..y_blocks)
+    let block_params: Vec<(usize, usize)> = (0..y_blocks)
         .map(|i| {
             let block_offset = (offsets[i] + pad_skip as isize) as usize;
             let next_offset = if i + 1 == y_blocks {
@@ -335,27 +308,30 @@ fn decrypt_v2(
                 offsets[i + 1] as usize
             };
             let block_len = next_offset.saturating_sub(block_offset);
-            let dst = i * w_align * 32;
-            (block_offset, block_len, dst)
+            (block_offset, block_len)
         })
         .collect();
 
     // --- Step 6: Parallel decode each row-block using rayon ---
-    let output_mutex = std::sync::Mutex::new(&mut output);
+    //
+    // Each block-row occupies 8 rows × w_align × 4 bytes = `w_align * 32`
+    // bytes of non-overlapping output space.  We use `par_chunks_mut` to give
+    // each parallel task its own `&mut [u8]` slice, achieving true
+    // parallelism without any locking.
+    let block_row_bytes = w_align * 32;
 
-    block_params
-        .par_iter()
-        .for_each(|&(block_offset, block_len, dst)| {
+    output
+        .par_chunks_mut(block_row_bytes)
+        .enumerate()
+        .for_each(|(i, chunk)| {
+            let &(block_offset, block_len) = &block_params[i];
             if block_offset >= remaining_data.len() || block_len == 0 {
                 return;
             }
             let end = (block_offset + block_len).min(remaining_data.len());
             let block_data = &remaining_data[block_offset..end];
 
-            let mut guard = output_mutex.lock().unwrap();
-            decode_block(
-                block_data, &tree1, &tree2, w_align, bpp, &dct, &mut guard, dst,
-            );
+            decode_block(block_data, &tree1, &tree2, w_align, bpp, &dct, chunk, 0);
         });
 
     // --- Step 7: Decode alpha channel if 32bpp ---

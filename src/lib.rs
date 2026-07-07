@@ -1,4 +1,10 @@
-#![warn(clippy::cargo)]
+#![warn(clippy::cargo, clippy::pedantic)]
+// ARC format uses u32 for offsets/sizes; intentional truncation in format code.
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::cast_possible_truncation
+)]
 
 pub mod arc;
 pub mod bgi;
@@ -62,6 +68,7 @@ fn is_png(data: &[u8]) -> bool {
 /// - **OGG** → BGI-wrapped audio (`bw  ` header)
 /// - **PNG** → image encoded with the given [`ImageFormat`]; CBG V1 falls back
 ///   to BGI on the rare occasion that Huffman code lengths are pathological.
+/// - **Other** → passed through as-is (scripts, text, etc.)
 fn encode_for_pack(data: &[u8], format: ImageFormat) -> ArcResult<Vec<u8>> {
     if ogg::is_ogg(data) {
         Ok(ogg::add_header(data))
@@ -97,7 +104,8 @@ fn encode_for_pack(data: &[u8], format: ImageFormat) -> ArcResult<Vec<u8>> {
             }
         }
     } else {
-        Err(ArcError::UnsupportedFileType("unknown format".to_string()))
+        debug!("unknown file type, passing through as-is");
+        Ok(data.to_vec())
     }
 }
 
@@ -115,32 +123,34 @@ pub fn decode_file(data: &[u8], output_path: impl AsRef<Path>) -> ArcResult<()> 
     // is encrypted; the body (from 0x50) is plaintext.
     // After stripping the 0x10-byte BSE metadata, the inner payload is:
     //   decrypted_header (0x40 bytes) + body (rest)
-    let bse_data = if bse::is_bse(data) {
+    let bse_owned;
+    let inner: &[u8] = if bse::is_bse(data) {
         let mut payload = data.to_vec();
         bse::decrypt_bse(&mut payload)?;
-        payload[0x10..].to_vec()
+        bse_owned = payload;
+        &bse_owned[0x10..]
     } else {
-        data.to_vec()
+        data
     };
 
-    if dsc::is_dsc(&bse_data) {
+    if dsc::is_dsc(inner) {
         debug!("DSC...");
-        let (decrypted, size) = dsc::decrypt_dsc(&bse_data)?;
+        let (decrypted, size) = dsc::decrypt_dsc(inner)?;
         dsc::save(&decrypted, size, output_path)?;
-    } else if cbg::is_cbg(&bse_data) {
-        let (decrypted, w, h) = cbg::decrypt_cbg(&bse_data)?;
+    } else if cbg::is_cbg(inner) {
+        let (decrypted, w, h) = cbg::decrypt_cbg(inner)?;
         cbg::save(&decrypted, w, h, output_path)?;
-    } else if bgi::is_bgi(&bse_data) {
-        let (decrypted, w, h) = bgi::decrypt_bgi(&bse_data)?;
+    } else if bgi::is_bgi(inner) {
+        let (decrypted, w, h) = bgi::decrypt_bgi(inner)?;
         bgi::save(&decrypted, w, h, output_path)?;
-    } else if ogg::is_bgi_ogg(&bse_data) {
+    } else if ogg::is_bgi_ogg(inner) {
         debug!("OGG...");
-        let header_removed = ogg::remove_header(&bse_data);
+        let header_removed = ogg::remove_header(inner);
         ogg::save(&header_removed, output_path)?;
     } else {
         debug!("uncompressed...");
         let mut file = fs::File::create(output_path.as_ref())?;
-        file.write_all(&bse_data)?;
+        file.write_all(inner)?;
     }
 
     Ok(())
@@ -153,7 +163,7 @@ pub fn unpack_arc(
     arc_path: impl AsRef<Path>,
     output_dir: impl AsRef<Path>,
 ) -> ArcResult<Vec<(String, ArcResult<()>)>> {
-    let arc = crate::arc::Arc::open(arc_path.as_ref())?;
+    let mut arc = crate::arc::Arc::open(arc_path.as_ref())?;
     let count = arc.files_count();
     let out_dir = output_dir.as_ref();
 
@@ -163,28 +173,24 @@ pub fn unpack_arc(
 
     info!("File count: {count}");
 
-    // Phase 1: sequential I/O only — File::try_clone() shares the underlying
-    // file pointer on all platforms, so concurrent seek+read causes data races
-    // (wrong offsets → corrupted output, or premature EOF → "failed to fill
-    // whole buffer").  Read everything into memory first, then decode in parallel.
-    let file_infos: Vec<(String, ArcResult<Vec<u8>>)> = (0..count)
-        .map(|i| {
-            let file_name = match arc.get_file_name(i) {
-                Ok(n) => n.to_string(),
-                Err(e) => {
-                    error!("Failed to get file name at index {i}: {e}");
-                    return (format!("<index {i}>"), Err(e));
-                }
-            };
-            match arc.get_file_data(i) {
-                Ok(d) => (file_name, Ok(d)),
-                Err(e) => {
-                    error!("Failed to read data for {file_name}: {e}");
-                    (file_name, Err(e))
-                }
+    // Phase 1: sequential I/O — read each file's raw data into memory.
+    // We read sequentially (no concurrent seek+read) to avoid data races on
+    // the shared file descriptor, then decode in parallel.
+    let mut file_infos: Vec<(String, ArcResult<Vec<u8>>)> = Vec::with_capacity(count as usize);
+    for i in 0..count {
+        let file_name = match arc.get_file_name(i) {
+            Ok(n) => n.to_string(),
+            Err(e) => {
+                error!("Failed to get file name at index {i}: {e}");
+                format!("<index {i}>")
             }
-        })
-        .collect();
+        };
+        let data = arc.get_file_data(i);
+        if let Err(ref e) = data {
+            error!("Failed to read data for {file_name}: {e}");
+        }
+        file_infos.push((file_name, data));
+    }
 
     let results: Vec<(String, ArcResult<()>)> = file_infos
         .into_par_iter()
@@ -207,21 +213,59 @@ pub fn unpack_arc(
 
 /// Pack files from a directory into an ARC archive (V1 or V2).
 ///
-/// Each file is encoded based on its type: OGG audio gets a BGI header,
-/// PNG images are encoded with the given [`ImageFormat`], and each file's
+/// PNG images are encoded with the given [`ImageFormat`]; OGG audio gets a BGI
+/// header; unrecognized files are passed through as-is. Each file's
 /// extension-less name is used as the ARC entry name.
+///
+/// Use [`pack_arc_audio`] instead when the directory contains only audio (no
+/// `image_format` parameter needed).
 pub fn pack_arc(
     input_dir: impl AsRef<Path>,
     output_file: impl AsRef<Path>,
     version: ArcVersion,
     image_format: ImageFormat,
 ) -> ArcResult<()> {
+    pack_arc_inner(
+        input_dir.as_ref(),
+        output_file.as_ref(),
+        version,
+        image_format,
+    )
+}
+
+/// Pack audio files from a directory into an ARC archive (V1 or V2).
+///
+/// Convenience wrapper around [`pack_arc`] for directories containing only OGG
+/// audio (and other non-image files). No `image_format` parameter is required.
+pub fn pack_arc_audio(
+    input_dir: impl AsRef<Path>,
+    output_file: impl AsRef<Path>,
+    version: ArcVersion,
+) -> ArcResult<()> {
+    pack_arc_inner(
+        input_dir.as_ref(),
+        output_file.as_ref(),
+        version,
+        ImageFormat::Bgi,
+    )
+}
+
+/// Shared implementation for [`pack_arc`] and [`pack_arc_audio`].
+fn pack_arc_inner(
+    input_dir: &Path,
+    output_file: &Path,
+    version: ArcVersion,
+    image_format: ImageFormat,
+) -> ArcResult<()> {
     info!("Image encoding format: {image_format}");
+
+    // Collect and sort entries for reproducible archive output.
+    let mut entries: Vec<_> = fs::read_dir(input_dir)?.collect::<Result<Vec<_>, _>>()?;
+    entries.sort_by_key(std::fs::DirEntry::file_name);
 
     let mut files: Vec<(String, Vec<u8>)> = Vec::new();
 
-    for entry in fs::read_dir(input_dir.as_ref())? {
-        let entry = entry?;
+    for entry in entries {
         let path = entry.path();
 
         if !path.is_file() {
@@ -238,15 +282,14 @@ pub fn pack_arc(
             .map(|n| n.to_string_lossy().to_string())
             .ok_or(ArcError::InvalidFormat)?;
 
-        let mut data = fs::read(&path)?;
+        let data = fs::read(&path)?;
+        let encoded = encode_for_pack(&data, image_format)?;
 
-        data = encode_for_pack(&data, image_format)?;
-
-        files.push((file_name, data));
+        files.push((file_name, encoded));
     }
 
     // Write ARC archive
-    let mut arc_file = fs::File::create(output_file.as_ref())?;
+    let mut arc_file = fs::File::create(output_file)?;
 
     // Write header: magic (12 bytes) + file count (4 bytes)
     arc_file.write_all(version.magic())?;
@@ -292,6 +335,7 @@ fn write_filename(
     arc_file.write_all(&name_bytes)
 }
 
+#[allow(clippy::many_single_char_names)]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -309,10 +353,10 @@ mod tests {
         buf
     }
 
-    /// Full pipeline: PNG → encode_for_pack → decode_file → compare RGBA
+    /// Full pipeline: PNG → `encode_for_pack` → `decode_file` → compare RGBA
     /// pixels.
     fn assert_round_trip(rgba: &[u8], width: u16, height: u16, format: ImageFormat) {
-        let png_data = make_png(rgba, width as u32, height as u32);
+        let png_data = make_png(rgba, u32::from(width), u32::from(height));
         assert!(is_png(&png_data));
 
         let encoded = encode_for_pack(&png_data, format).unwrap();
@@ -384,7 +428,7 @@ mod tests {
                 ]
             })
             .collect();
-        let png_data = make_png(&rgba, w as u32, h as u32);
+        let png_data = make_png(&rgba, u32::from(w), u32::from(h));
         std::fs::write(input_dir.join("test.png"), &png_data).unwrap();
 
         // Pack
@@ -454,13 +498,13 @@ mod tests {
     #[test]
     fn test_decode_fixture_arc_bgi() {
         let arc_data = include_bytes!("../test_assets/fixtures/arc_bgi.arc");
-        let (_tmp, results) = unpack_fixture(arc_data);
+        let (tmp, results) = unpack_fixture(arc_data);
         for (name, r) in &results {
             r.as_ref().unwrap_or_else(|e| panic!("{name}: {e}"));
         }
 
         let (expected, ew, eh) = expected_bgi_pixels();
-        let out_dir = _tmp.path().join("out");
+        let out_dir = tmp.path().join("out");
         let img = write::read_png(&std::fs::read(out_dir.join("image.png")).unwrap()).unwrap();
         assert_eq!(img.width, ew);
         assert_eq!(img.height, eh);
@@ -470,13 +514,13 @@ mod tests {
     #[test]
     fn test_decode_fixture_arc_cbg() {
         let arc_data = include_bytes!("../test_assets/fixtures/arc_cbg.arc");
-        let (_tmp, results) = unpack_fixture(arc_data);
+        let (tmp, results) = unpack_fixture(arc_data);
         for (name, r) in &results {
             r.as_ref().unwrap_or_else(|e| panic!("{name}: {e}"));
         }
 
         let (expected, ew, eh) = expected_cbg_pixels();
-        let out_dir = _tmp.path().join("out");
+        let out_dir = tmp.path().join("out");
         let img = write::read_png(&std::fs::read(out_dir.join("image.png")).unwrap()).unwrap();
         assert_eq!(img.width, ew);
         assert_eq!(img.height, eh);
@@ -487,12 +531,12 @@ mod tests {
     #[test]
     fn test_decode_fixture_arc_audio() {
         let arc_data = include_bytes!("../test_assets/fixtures/arc_audio.arc");
-        let (_tmp, results) = unpack_fixture(arc_data);
+        let (tmp, results) = unpack_fixture(arc_data);
         for (name, r) in &results {
             r.as_ref().unwrap_or_else(|e| panic!("{name}: {e}"));
         }
 
-        let out_dir = _tmp.path().join("out");
+        let out_dir = tmp.path().join("out");
         let ogg_data = std::fs::read(out_dir.join("audio.ogg")).unwrap();
         let expected = include_bytes!("../test_assets/test.ogg");
         assert_eq!(ogg_data, expected.as_slice());

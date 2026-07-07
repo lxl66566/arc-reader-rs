@@ -1,6 +1,8 @@
+#![allow(clippy::cast_possible_truncation, clippy::many_single_char_names)]
+
 use std::{fs, path::Path};
 
-use arc_reader::{ImageFormat, arc::ArcVersion, pack_arc, write};
+use arc_reader::{ImageFormat, arc::ArcVersion, pack_arc, pack_arc_audio, write};
 
 fn make_bgi_pixels() -> (Vec<u8>, u16, u16) {
     let (w, h) = (8u16, 8u16);
@@ -61,7 +63,7 @@ fn main() {
     let ogg_data = fs::read(manifest_dir.join("test_assets").join("test.ogg")).unwrap();
     fs::write(dir.join("audio.ogg"), &ogg_data).unwrap();
     let out = fixtures_dir.join("arc_audio.arc");
-    pack_arc(&dir, &out, ArcVersion::V2, ImageFormat::Bgi).unwrap();
+    pack_arc_audio(&dir, &out, ArcVersion::V2).unwrap();
     println!("Generated: {}", out.display());
 
     // Cleanup temp files

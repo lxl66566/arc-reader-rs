@@ -37,7 +37,8 @@ enum Commands {
         #[arg(long, short, default_value = "2", value_parser = parse_version)]
         version: ArcVersion,
 
-        /// Image encoding format: "bgi" (default) or "cbg" (CompressedBG V1)
+        /// Image encoding format: `"bgi"` (default) or `"cbg"` (`CompressedBG`
+        /// V1)
         #[arg(long, short, default_value = "bgi", value_parser = |s: &str| ImageFormat::try_from(s))]
         image: ImageFormat,
     },
@@ -68,7 +69,7 @@ fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
             if !errors.is_empty() {
                 error!("Failed to process {} files:", errors.len());
                 for (name, e) in &errors {
-                    error!("  - {}: {}", name, e);
+                    error!("  - {name}: {e}");
                 }
             }
         }

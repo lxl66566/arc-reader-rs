@@ -8,7 +8,10 @@ use std::path::Path;
 use bytes::Buf;
 use log::debug;
 
-use crate::{error::ArcResult, write::write_rgba_to_png};
+use crate::{
+    error::ArcResult,
+    write::{convert_bgr_to_rgba, write_rgba_to_png},
+};
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -76,7 +79,7 @@ pub fn decrypt_bgi(data: &[u8]) -> ArcResult<(Vec<u8>, u16, u16)> {
         );
     }
 
-    let pixels = convert_to_rgba(&output, width as usize, height as usize, bpp);
+    let pixels = convert_bgr_to_rgba(&output, width as usize, height as usize, bpp);
     Ok((pixels, width, height))
 }
 
@@ -180,42 +183,7 @@ fn restore_pixels(input: &[u8], output: &mut [u8], width: usize, height: usize, 
 // Conversion
 // ---------------------------------------------------------------------------
 
-/// Convert raw pixel data (BGR/BGRA/Gray) to RGBA.
-fn convert_to_rgba(data: &[u8], width: usize, height: usize, bpp: u32) -> Vec<u8> {
-    let pixel_size = (bpp / 8) as usize;
-    let total = width * height;
-    let mut rgba = Vec::with_capacity(total * 4);
-
-    for i in 0..total {
-        let src = i * pixel_size;
-        match bpp {
-            32 => {
-                // BGRX or BGRA: BGI stores as B,G,R,A
-                rgba.extend_from_slice(&[
-                    data[src + 2], // R
-                    data[src + 1], // G
-                    data[src],     // B
-                    data[src + 3], // A
-                ]);
-            }
-            24 => {
-                rgba.extend_from_slice(&[
-                    data[src + 2], // R
-                    data[src + 1], // G
-                    data[src],     // B
-                    0xFF,          // A
-                ]);
-            }
-            8 => {
-                let v = data[src];
-                rgba.extend_from_slice(&[v, v, v, 0xFF]);
-            }
-            _ => {}
-        }
-    }
-
-    rgba
-}
+// Pixel conversion is shared via write::convert_bgr_to_rgba.
 
 #[cfg(test)]
 mod tests {

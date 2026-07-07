@@ -1,3 +1,6 @@
+// BGI audio wrapper header size is u32; files > 4 GB are unsupported.
+#![allow(clippy::cast_possible_truncation)]
+
 use std::{
     fs::File,
     io::{Cursor, Write},
@@ -12,9 +15,6 @@ use crate::error::ArcResult;
 /// `OggS`).
 #[must_use]
 pub fn is_bgi_ogg(data: &[u8]) -> bool {
-    if data.len() < 8 {
-        return false;
-    }
     // Must have "bw  " at offset 4 (BGI audio signature)
     if data.len() < 8 || &data[4..8] != b"bw  " {
         return false;
@@ -69,7 +69,7 @@ pub fn add_header(data: &[u8]) -> Vec<u8> {
     header[8..12].copy_from_slice(&(data.len() as u32).to_le_bytes());
     header[12..16].copy_from_slice(&meta.sample_count.to_le_bytes());
     header[16..20].copy_from_slice(&meta.sample_rate.to_le_bytes());
-    header[20..24].copy_from_slice(&(meta.channels as u32).to_le_bytes());
+    header[20..24].copy_from_slice(&u32::from(meta.channels).to_le_bytes());
 
     // Concatenate header and data
     let mut result = header;
@@ -104,9 +104,8 @@ struct VorbisMeta {
 /// stream, so callers can fill the wrapper header defensively.
 fn read_vorbis_meta(ogg_data: &[u8]) -> VorbisMeta {
     let cursor = Cursor::new(ogg_data);
-    let mut osr = match OggStreamReader::new(cursor) {
-        Ok(reader) => reader,
-        Err(_) => return VorbisMeta::default(),
+    let Ok(mut osr) = OggStreamReader::new(cursor) else {
+        return VorbisMeta::default();
     };
 
     let sample_rate = osr.ident_hdr.audio_sample_rate;

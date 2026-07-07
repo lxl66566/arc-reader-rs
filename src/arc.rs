@@ -1,3 +1,7 @@
+// ARC format uses u32/i64 for file offsets; intentional truncation in format
+// code.
+#![allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+
 use std::{
     fs::File,
     io::{Read, Seek, SeekFrom},
@@ -13,10 +17,11 @@ use crate::error::{ArcError, ArcResult};
 /// V1 is the legacy `PackFile    ` format; V2 is the newer `BURIKO ARC20`
 /// format. Each variant knows its own magic, per-entry metadata size and
 /// filename field width.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ArcVersion {
-    V1,
+    #[default]
     V2,
+    V1,
 }
 
 impl ArcVersion {
@@ -71,7 +76,7 @@ pub struct ArcFile {
 /// ARC archive reader.
 pub struct Arc {
     file: File,
-    data: u32,
+    data_offset: u32,
     count: u32,
     version: ArcVersion,
     files: Vec<ArcFile>,
@@ -105,7 +110,7 @@ impl Arc {
 
         Ok(Arc {
             file,
-            data: data_position,
+            data_offset: data_position,
             count: number_of_files,
             version,
             files,
@@ -125,7 +130,10 @@ impl Arc {
     }
 
     /// Read the raw data for the file at the given index.
-    pub fn get_file_data(&self, idx: u32) -> ArcResult<Vec<u8>> {
+    ///
+    /// Takes `&mut self` because reading requires seeking the underlying file
+    /// descriptor. This avoids the overhead of `File::try_clone()` per call.
+    pub fn get_file_data(&mut self, idx: u32) -> ArcResult<Vec<u8>> {
         if idx >= self.count {
             return Err(ArcError::IndexOutOfBounds(idx, self.count));
         }
@@ -133,13 +141,11 @@ impl Arc {
         let file_info = &self.files[idx as usize];
         let mut data = vec![0u8; file_info.size as usize];
 
-        let mut file_clone = self.file.try_clone()?;
-
-        file_clone.seek(SeekFrom::Start(
-            u64::from(self.data) + u64::from(file_info.offset),
+        self.file.seek(SeekFrom::Start(
+            u64::from(self.data_offset) + u64::from(file_info.offset),
         ))?;
 
-        file_clone.read_exact(&mut data)?;
+        self.file.read_exact(&mut data)?;
 
         Ok(data)
     }

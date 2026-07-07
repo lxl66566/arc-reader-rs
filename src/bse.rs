@@ -2,8 +2,15 @@
 //!
 //! Supports BSE 1.0 and BSE 1.1, matching `GARBro`'s ArcBGI.cs implementation.
 
+// Ported from C#; integer casts and magic constants are intentional.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::unreadable_literal
+)]
+
 use log::debug;
-use smallvec::SmallVec;
 
 use crate::error::{ArcError, ArcResult};
 
@@ -31,13 +38,12 @@ pub fn decrypt_bse(data: &mut [u8]) -> ArcResult<()> {
     debug!("BSE {}.{}", version >> 8, version & 0xFF);
 
     // Read header fields
-    let _ = read16_from(data, 0x08); // version (already read above)
     let sum_check = data[0x0A];
     let xor_check = data[0x0B];
     let key = read32_from(data, 0x0C) as i32;
 
     // Decrypt the 0x40-byte header starting at offset 0x10
-    let mut flags: SmallVec<[bool; 64]> = SmallVec::from([false; 0x40]);
+    let mut flags = [false; 0x40];
 
     let mut hash = key;
     for _ in 0..0x40 {
@@ -63,9 +69,9 @@ pub fn decrypt_bse(data: &mut [u8]) -> ArcResult<()> {
     // Verify checksums
     let mut sum_data: u8 = 0;
     let mut xor_data: u8 = 0;
-    for i in 0..0x40 {
-        sum_data = sum_data.wrapping_add(data[0x10 + i]);
-        xor_data ^= data[0x10 + i];
+    for &b in &data[0x10..0x50] {
+        sum_data = sum_data.wrapping_add(b);
+        xor_data ^= b;
     }
 
     if sum_data == sum_check && xor_data == xor_check {
@@ -90,7 +96,7 @@ fn bse_rand_100(seed: &mut i32) -> i32 {
     let tmp = ((s.wrapping_mul(257) >> 8)
         .wrapping_add(s.wrapping_mul(97))
         .wrapping_add(23))
-        ^ (-1496474763i32);
+        ^ 0xA6CD9B75_u32 as i32; // -1496474763
     *seed = tmp.rotate_left(16);
     *seed
 }
@@ -101,7 +107,7 @@ fn bse_rand_101(seed: &mut i32) -> i32 {
     let tmp = ((s.wrapping_mul(127) >> 7)
         .wrapping_add(s.wrapping_mul(83))
         .wrapping_add(53))
-        ^ (-1187621284_i32); // 0xB97A7E5C as i32
+        ^ 0xB936565C_u32 as i32; // -1187621284
     *seed = tmp.rotate_left(16);
     *seed
 }
@@ -115,10 +121,6 @@ fn read32_from(data: &[u8], offset: usize) -> u32 {
         data[offset + 2],
         data[offset + 3],
     ])
-}
-
-fn read16_from(data: &[u8], offset: usize) -> u16 {
-    u16::from_le_bytes([data[offset], data[offset + 1]])
 }
 
 /// Rotate byte right by `count` bits.

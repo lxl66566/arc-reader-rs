@@ -1,3 +1,12 @@
+// Ported from C (GARBro); integer casts and complex control flow are
+// intentional.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::too_many_arguments
+)]
+
 use std::{fs::File, io::Write, path::Path};
 
 use bytes::Buf;
@@ -29,6 +38,7 @@ pub fn is_dsc(data: &[u8]) -> bool {
 }
 
 /// Decrypt a DSC buffer, returning the decoded data and its size.
+#[allow(clippy::too_many_lines)]
 pub fn decrypt_dsc(crypted: &[u8]) -> ArcResult<(Vec<u8>, u32)> {
     let mut data_ptr = &crypted[16..];
 
