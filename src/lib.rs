@@ -403,4 +403,98 @@ mod tests {
         assert_eq!(img.height, h);
         assert_eq!(img.rgba, rgba);
     }
+
+    // -----------------------------------------------------------------------
+    // Decode-from-fixture tests
+    // -----------------------------------------------------------------------
+    //
+    // These tests load known-good `.arc` files from `test_assets/fixtures/`
+    // and verify that the decoder still produces correct output.  Unlike the
+    // round-trip tests above, they *only* exercise the decoder pipeline,
+    // guarding against format-incompatible decoder changes.
+
+    fn expected_bgi_pixels() -> (Vec<u8>, u16, u16) {
+        let (w, h) = (8u16, 8u16);
+        let total = usize::from(w) * usize::from(h);
+        let rgba: Vec<u8> = (0..total)
+            .flat_map(|i| {
+                let r = ((i * 31) % 256) as u8;
+                let g = ((i * 67) % 256) as u8;
+                let b = ((i * 13) % 256) as u8;
+                [r, g, b, 0xFF]
+            })
+            .collect();
+        (rgba, w, h)
+    }
+
+    fn expected_cbg_pixels() -> (Vec<u8>, u16, u16) {
+        let (w, h) = (16u16, 16u16);
+        let total = usize::from(w) * usize::from(h);
+        let rgba: Vec<u8> = (0..total)
+            .flat_map(|i| {
+                let r = ((i * 41) % 256) as u8;
+                let g = ((i * 73) % 256) as u8;
+                let b = ((i * 17) % 256) as u8;
+                let a = if (i * 11) % 256 > 128 { 0xFF } else { 0x80 };
+                [r, g, b, a]
+            })
+            .collect();
+        (rgba, w, h)
+    }
+
+    fn unpack_fixture(arc_data: &[u8]) -> (tempfile::TempDir, Vec<(String, ArcResult<()>)>) {
+        let tmp = tempfile::tempdir().unwrap();
+        let arc_path = tmp.path().join("test.arc");
+        std::fs::write(&arc_path, arc_data).unwrap();
+        let out_dir = tmp.path().join("out");
+        let results = unpack_arc(&arc_path, &out_dir).unwrap();
+        (tmp, results)
+    }
+
+    #[test]
+    fn test_decode_fixture_arc_bgi() {
+        let arc_data = include_bytes!("../test_assets/fixtures/arc_bgi.arc");
+        let (_tmp, results) = unpack_fixture(arc_data);
+        for (name, r) in &results {
+            r.as_ref().unwrap_or_else(|e| panic!("{name}: {e}"));
+        }
+
+        let (expected, ew, eh) = expected_bgi_pixels();
+        let out_dir = _tmp.path().join("out");
+        let img = write::read_png(&std::fs::read(out_dir.join("image.png")).unwrap()).unwrap();
+        assert_eq!(img.width, ew);
+        assert_eq!(img.height, eh);
+        assert_eq!(img.rgba, expected);
+    }
+
+    #[test]
+    fn test_decode_fixture_arc_cbg() {
+        let arc_data = include_bytes!("../test_assets/fixtures/arc_cbg.arc");
+        let (_tmp, results) = unpack_fixture(arc_data);
+        for (name, r) in &results {
+            r.as_ref().unwrap_or_else(|e| panic!("{name}: {e}"));
+        }
+
+        let (expected, ew, eh) = expected_cbg_pixels();
+        let out_dir = _tmp.path().join("out");
+        let img = write::read_png(&std::fs::read(out_dir.join("image.png")).unwrap()).unwrap();
+        assert_eq!(img.width, ew);
+        assert_eq!(img.height, eh);
+        assert!(img.has_alpha);
+        assert_eq!(img.rgba, expected);
+    }
+
+    #[test]
+    fn test_decode_fixture_arc_audio() {
+        let arc_data = include_bytes!("../test_assets/fixtures/arc_audio.arc");
+        let (_tmp, results) = unpack_fixture(arc_data);
+        for (name, r) in &results {
+            r.as_ref().unwrap_or_else(|e| panic!("{name}: {e}"));
+        }
+
+        let out_dir = _tmp.path().join("out");
+        let ogg_data = std::fs::read(out_dir.join("audio.ogg")).unwrap();
+        let expected = include_bytes!("../test_assets/test.ogg");
+        assert_eq!(ogg_data, expected.as_slice());
+    }
 }
