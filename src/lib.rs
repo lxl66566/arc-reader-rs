@@ -11,7 +11,7 @@ pub mod write;
 
 pub(crate) mod decrypt;
 
-use std::{fs, io::Write, path::Path, sync::Mutex};
+use std::{fs, io::Write, path::Path};
 
 use log::{debug, error, info, warn};
 use rayon::prelude::*;
@@ -86,26 +86,46 @@ pub fn unpack_arc(
 
     info!("File count: {count}");
 
-    let file_infos: Vec<(String, Vec<u8>)> = (0..count)
-        .filter_map(|i| {
-            let file_name = arc.get_file_name(i).ok()?;
-            let raw_data = arc.get_file_data(i).ok()?;
-            Some((file_name.to_string(), raw_data))
+    // Phase 1: sequential I/O only — File::try_clone() shares the underlying
+    // file pointer on all platforms, so concurrent seek+read causes data races
+    // (wrong offsets → corrupted output, or premature EOF → "failed to fill
+    // whole buffer").  Read everything into memory first, then decode in parallel.
+    let file_infos: Vec<(String, ArcResult<Vec<u8>>)> = (0..count)
+        .map(|i| {
+            let file_name = match arc.get_file_name(i) {
+                Ok(n) => n.to_string(),
+                Err(e) => {
+                    error!("Failed to get file name at index {i}: {e}");
+                    return (format!("<index {i}>"), Err(e));
+                }
+            };
+            match arc.get_file_data(i) {
+                Ok(d) => (file_name, Ok(d)),
+                Err(e) => {
+                    error!("Failed to read data for {file_name}: {e}");
+                    (file_name, Err(e))
+                }
+            }
         })
         .collect();
 
-    let results = Mutex::new(Vec::with_capacity(count as usize));
-    file_infos.par_iter().for_each(|(file_name, raw_data)| {
-        info!("Extracting {file_name}");
-        let savepath = out_dir.join(file_name);
-        let result = decode_file(raw_data, &savepath);
-        if result.is_err() {
-            error!("Failed to process file {file_name}: {result:?}");
-        }
-        results.lock().unwrap().push((file_name.clone(), result));
-    });
+    let results: Vec<(String, ArcResult<()>)> = file_infos
+        .into_par_iter()
+        .map(|(file_name, data)| {
+            let data = match data {
+                Ok(d) => d,
+                Err(e) => return (file_name, Err(e)),
+            };
+            info!("Extracting {file_name}");
+            let result = decode_file(&data, out_dir.join(&file_name));
+            if let Err(ref e) = result {
+                error!("Failed to process file {file_name}: {e}");
+            }
+            (file_name, result)
+        })
+        .collect();
 
-    Ok(results.into_inner().unwrap())
+    Ok(results)
 }
 
 /// Pack files from a directory into an ARC archive (V1 or V2).
