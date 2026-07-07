@@ -22,12 +22,12 @@ type DctCoefficients = [[f32; 64]; 2];
 // ---------------------------------------------------------------------------
 
 /// Check whether `data` starts with the CompressedBG magic signature.
-pub fn is_valid(data: &[u8], size: u32) -> bool {
+pub fn is_cbg(data: &[u8], size: u32) -> bool {
     size >= 0x30 && data.len() >= 15 && &data[0..15] == b"CompressedBG___"
 }
 
 /// Decrypt a CompressedBG buffer, returning (RGBA pixels, width, height).
-pub fn decrypt(crypted: &[u8]) -> ArcResult<(Vec<u8>, u16, u16)> {
+pub fn decrypt_cbg(crypted: &[u8]) -> ArcResult<(Vec<u8>, u16, u16)> {
     let mut ptr = &crypted[16..];
 
     let width = ptr.get_u16_le();

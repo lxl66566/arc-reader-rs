@@ -15,7 +15,7 @@ use crate::{error::ArcResult, write::write_rgba_to_png};
 // ---------------------------------------------------------------------------
 
 /// Check whether `data` looks like a valid BGI uncompressed image.
-pub fn is_valid(data: &[u8], size: u32) -> bool {
+pub fn is_bgi(data: &[u8], size: u32) -> bool {
     if size < 0x10 || data.len() < 0x10 {
         return false;
     }
@@ -46,7 +46,7 @@ pub fn is_valid(data: &[u8], size: u32) -> bool {
 }
 
 /// Decrypt a BGI image buffer, returning (RGBA pixels, width, height).
-pub fn decrypt(data: &[u8]) -> ArcResult<(Vec<u8>, u16, u16)> {
+pub fn decrypt_bgi(data: &[u8]) -> ArcResult<(Vec<u8>, u16, u16)> {
     let mut ptr = data;
     let width = ptr.get_u16_le();
     let height = ptr.get_u16_le();

@@ -10,7 +10,7 @@ use crate::error::ArcResult;
 
 /// Check whether this looks like a BGI-wrapped OGG/Vorbis file (bw header +
 /// OggS).
-pub fn is_valid(data: &[u8]) -> bool {
+pub fn is_bgi_ogg(data: &[u8]) -> bool {
     if data.len() < 8 {
         return false;
     }
@@ -32,7 +32,7 @@ pub fn is_ogg(data: &[u8]) -> bool {
 }
 
 pub fn remove_header(data: Vec<u8>) -> Vec<u8> {
-    assert!(is_valid(&data));
+    assert!(is_bgi_ogg(&data));
     // Read the Ogg data offset from the first 4 bytes (matches GARBro's AudioBGI)
     let offset = u32::from_le_bytes(data[0..4].try_into().unwrap()) as usize;
     data[offset..].to_vec()
@@ -71,7 +71,7 @@ pub fn save(data: &[u8], savepath: impl AsRef<Path>) -> ArcResult<()> {
     Ok(())
 }
 
-fn calculate_sample_count(ogg_data: &[u8]) -> u32 {
+pub fn calculate_sample_count(ogg_data: &[u8]) -> u32 {
     // Use memory cursor to read OGG data
     let cursor = Cursor::new(ogg_data);
     let mut osr = match OggStreamReader::new(cursor) {

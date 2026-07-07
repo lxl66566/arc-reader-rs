@@ -22,10 +22,10 @@ pub const V2_NAME_LEN: usize = 96;
 
 /// Represents a single file entry within an ARC archive.
 #[derive(Debug, Clone)]
-struct ArcFile {
-    name: Vec<u8>,
-    offset: u32,
-    size: u32,
+pub struct ArcFile {
+    pub name: Vec<u8>,
+    pub offset: u32,
+    pub size: u32,
 }
 
 /// ARC archive reader.
@@ -33,6 +33,7 @@ pub struct Arc {
     file: File,
     data: u32,
     count: u32,
+    version: u8,
     files: Vec<ArcFile>,
 }
 
@@ -76,6 +77,7 @@ impl Arc {
             file,
             data: data_position,
             count: number_of_files,
+            version,
             files,
         })
     }
@@ -83,6 +85,11 @@ impl Arc {
     /// Returns the total number of files in the archive.
     pub fn files_count(&self) -> u32 {
         self.count
+    }
+
+    /// Returns the ARC format version (1 or 2).
+    pub fn version(&self) -> u8 {
+        self.version
     }
 
     /// Read the raw data for the file at the given index.

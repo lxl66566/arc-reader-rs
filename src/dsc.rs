@@ -23,7 +23,7 @@ impl NodeDSC {
 }
 
 /// 检查数据是否是有效的 DSC 文件
-pub fn is_valid(data: &[u8], size: u32) -> bool {
+pub fn is_dsc(data: &[u8], size: u32) -> bool {
     if size < 32 {
         return false;
     }
@@ -33,7 +33,7 @@ pub fn is_valid(data: &[u8], size: u32) -> bool {
 }
 
 /// 解密 DSC 文件，返回解密后的数据和大小
-pub fn decrypt(crypted: &[u8], crypted_size: u32) -> ArcResult<(Vec<u8>, u32)> {
+pub fn decrypt_dsc(crypted: &[u8], crypted_size: u32) -> ArcResult<(Vec<u8>, u32)> {
     let mut data_ptr = &crypted[16..];
 
     let mut hash = data_ptr.get_u32_le();
@@ -172,7 +172,7 @@ pub fn decrypt(crypted: &[u8], crypted_size: u32) -> ArcResult<(Vec<u8>, u32)> {
 }
 
 /// 检查数据是否是图像
-fn dsc_is_image(data: &[u8]) -> bool {
+pub fn is_image(data: &[u8]) -> bool {
     if data.len() < 16 {
         return false;
     }
@@ -205,7 +205,7 @@ fn dsc_is_image(data: &[u8]) -> bool {
 
 /// Save DSC data, save as PNG if it's an image, otherwise save as raw file
 pub fn save(data: &[u8], size: u32, savepath: impl AsRef<Path>) -> ArcResult<()> {
-    if size > 15 && dsc_is_image(data) {
+    if size > 15 && is_image(data) {
         let mut data_ptr = data;
         let width = data_ptr.get_u16_le();
         let height = data_ptr.get_u16_le();

@@ -1,15 +1,15 @@
 /// 获取 u32 的高位字
-pub fn my_hiword(v: u32) -> u16 {
+pub(crate) fn my_hiword(v: u32) -> u16 {
     (v >> 16) as u16
 }
 
 /// 获取 u32 的低位字
-pub fn my_loword(v: u32) -> u16 {
+pub(crate) fn my_loword(v: u32) -> u16 {
     (v & 0xFFFF) as u16
 }
 
 /// 更新哈希值
-pub fn hash_update(hash_val: &mut u32) -> u32 {
+pub(crate) fn hash_update(hash_val: &mut u32) -> u32 {
     let edx = 20021_u32.wrapping_mul(my_loword(*hash_val) as u32);
     let eax = 20021_u32
         .wrapping_mul(my_hiword(*hash_val) as u32)

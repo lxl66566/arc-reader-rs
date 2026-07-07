@@ -7,7 +7,7 @@ use smallvec::SmallVec;
 use crate::error::{ArcError, ArcResult};
 
 /// Check whether the data starts with a valid BSE 1.x signature.
-pub fn is_valid(data: &[u8], size: u32) -> bool {
+pub fn is_bse(data: &[u8], size: u32) -> bool {
     if size < 0x50 {
         return false;
     }
@@ -19,7 +19,7 @@ pub fn is_valid(data: &[u8], size: u32) -> bool {
 ///
 /// The BSE header occupies bytes 0x10..0x50 of the file. Only those 64 bytes
 /// are encrypted; the rest of the file (body from 0x50 onwards) is plaintext.
-pub fn decrypt(data: &mut [u8]) -> ArcResult<()> {
+pub fn decrypt_bse(data: &mut [u8]) -> ArcResult<()> {
     if data.len() < 0x50 {
         return Err(ArcError::BseDecryptError);
     }
