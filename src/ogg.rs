@@ -43,11 +43,20 @@ pub fn remove_header(data: &[u8]) -> Vec<u8> {
 
 #[must_use]
 pub fn add_header(data: &[u8]) -> Vec<u8> {
+    // BGI audio wrapper header (matches GARBro's AudioBGI):
+    //   offset 0..4   : data offset (always 0x40)
+    //   offset 4..8   : "bw  " signature
+    //   offset 8..12  : wrapped file size
+    //   offset 12..16 : total PCM sample count
+    //   offset 16..20 : sample rate   (filled from the vorbis ident header)
+    //   offset 20..24 : channel count (filled from the vorbis ident header)
+    //   offset 48..52 : unknown constant (0x03)
     let mut header = vec![
         0x40, 0x00, 0x00, 0x00, 0x62, 0x77, 0x20, 0x20, //
         0x00, 0x00, 0x00, 0x00, // file size placeholder
         0x00, 0x00, 0x00, 0x00, // sample count placeholder
-        0x44, 0xAC, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, //
+        0x00, 0x00, 0x00, 0x00, // sample rate placeholder
+        0x00, 0x00, 0x00, 0x00, // channels placeholder
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, //
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, //
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, //
@@ -55,12 +64,12 @@ pub fn add_header(data: &[u8]) -> Vec<u8> {
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     ];
 
-    // Compute file size (raw data length + header length)
+    // Pull sample rate, channel count, and PCM sample count from the stream.
+    let meta = read_vorbis_meta(data);
     header[8..12].copy_from_slice(&(data.len() as u32).to_le_bytes());
-
-    // Compute sample count
-    let sample_count = calculate_sample_count(data);
-    header[12..16].copy_from_slice(&sample_count.to_le_bytes());
+    header[12..16].copy_from_slice(&meta.sample_count.to_le_bytes());
+    header[16..20].copy_from_slice(&meta.sample_rate.to_le_bytes());
+    header[20..24].copy_from_slice(&(meta.channels as u32).to_le_bytes());
 
     // Concatenate header and data
     let mut result = header;
@@ -77,12 +86,31 @@ pub fn save(data: &[u8], savepath: impl AsRef<Path>) -> ArcResult<()> {
 
 #[must_use]
 pub fn calculate_sample_count(ogg_data: &[u8]) -> u32 {
-    // Use memory cursor to read OGG data
+    read_vorbis_meta(ogg_data).sample_count
+}
+
+/// Metadata extracted from an OGG/Vorbis stream by [`read_vorbis_meta`].
+#[derive(Default)]
+struct VorbisMeta {
+    sample_rate: u32,
+    channels: u8,
+    sample_count: u32,
+}
+
+/// Decode an OGG/Vorbis blob just enough to read its identification header
+/// (sample rate, channel count) and count its decoded PCM samples.
+///
+/// Returns a zeroed [`VorbisMeta`] if the data is not a valid OGG/Vorbis
+/// stream, so callers can fill the wrapper header defensively.
+fn read_vorbis_meta(ogg_data: &[u8]) -> VorbisMeta {
     let cursor = Cursor::new(ogg_data);
     let mut osr = match OggStreamReader::new(cursor) {
         Ok(reader) => reader,
-        Err(_) => return 0,
+        Err(_) => return VorbisMeta::default(),
     };
+
+    let sample_rate = osr.ident_hdr.audio_sample_rate;
+    let channels = osr.ident_hdr.audio_channels;
 
     // Calculate total sample count
     let mut total_samples = 0u32;
@@ -90,7 +118,11 @@ pub fn calculate_sample_count(ogg_data: &[u8]) -> u32 {
         total_samples = total_samples.saturating_add(packet.len() as u32);
     }
 
-    total_samples
+    VorbisMeta {
+        sample_rate,
+        channels,
+        sample_count: total_samples,
+    }
 }
 
 #[cfg(test)]
@@ -105,6 +137,11 @@ mod tests {
         assert_eq!(
             test_ogg_data_with_header[8..16],
             [0x07, 0x17, 0x00, 0x00, 0x40, 0x76, 0x00, 0x00]
+        );
+        // Sample rate (44100) and channel count (1) read from the vorbis stream
+        assert_eq!(
+            test_ogg_data_with_header[16..24],
+            [0x44, 0xAC, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00]
         );
         let test_ogg_data_without_header = remove_header(&test_ogg_data_with_header);
         assert_eq!(test_ogg_data.as_ref(), test_ogg_data_without_header);
