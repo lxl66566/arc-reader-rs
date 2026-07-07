@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use arc_reader::arc::ArcVersion;
 use clap::{Parser, Subcommand};
 use log::{error, info};
 
@@ -33,17 +34,16 @@ enum Commands {
         output_file: Option<PathBuf>,
 
         /// ARC version
-        #[arg(long, short, default_value = "2", value_parser = validate_version)]
-        version: u8,
+        #[arg(long, short, default_value = "2", value_parser = parse_version)]
+        version: ArcVersion,
     },
 }
 
-fn validate_version(v: &str) -> Result<u8, String> {
-    let v = v.parse::<u8>().map_err(|_| "Invalid version".to_string())?;
-    if v == 1 || v == 2 {
-        Ok(v)
-    } else {
-        Err("Invalid version, only 1 or 2 are allowed".to_string())
+fn parse_version(v: &str) -> Result<ArcVersion, String> {
+    match v {
+        "1" => Ok(ArcVersion::V1),
+        "2" => Ok(ArcVersion::V2),
+        _ => Err("invalid version, only 1 or 2 are allowed".to_string()),
     }
 }
 
@@ -54,7 +54,7 @@ fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
             output_path,
         } => {
             let out_dir = output_path.unwrap_or(arc_file.with_extension(""));
-            let results = arc_reader_rs::unpack_arc(&arc_file, &out_dir)?;
+            let results = arc_reader::unpack_arc(&arc_file, &out_dir)?;
 
             let errors: Vec<_> = results
                 .into_iter()
@@ -74,7 +74,7 @@ fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
             version,
         } => {
             let output = output_file.unwrap_or(input_dir.with_extension("arc"));
-            arc_reader_rs::pack_arc(&input_dir, &output, version)?;
+            arc_reader::pack_arc(&input_dir, &output, version)?;
             info!("Packed to {}", output.display());
         }
     }
@@ -115,7 +115,7 @@ mod tests {
             command: Commands::Pack {
                 input_dir,
                 output_file: Some(temp_dir_path.join("test.arc")),
-                version: 2,
+                version: ArcVersion::V2,
             },
         })
         .unwrap();

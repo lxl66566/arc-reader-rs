@@ -1,3 +1,5 @@
+#![warn(clippy::cargo)]
+
 pub mod arc;
 pub mod bgi;
 pub mod bse;
@@ -15,7 +17,7 @@ use log::{debug, error, info, warn};
 use rayon::prelude::*;
 
 use crate::{
-    arc::{V1_MAGIC, V1_METADATA_SIZE, V1_NAME_LEN, V2_MAGIC, V2_METADATA_SIZE, V2_NAME_LEN},
+    arc::ArcVersion,
     error::{ArcError, ArcResult},
 };
 
@@ -24,16 +26,16 @@ use crate::{
 /// Automatically detects and handles:
 /// - BSE stream encryption (transparently decrypted)
 /// - DSC FORMAT 1.00 compressed data (→ PNG if image, else raw)
-/// - CompressedBG (CBG) V1/V2 images (→ PNG)
+/// - `CompressedBG` (CBG) V1/V2 images (→ PNG)
 /// - BGI uncompressed images (→ PNG)
 /// - BGI-wrapped OGG Vorbis audio (→ OGG)
 /// - Unrecognized data (written as-is)
-pub fn decode_file(data: &[u8], file_size: u32, output_path: impl AsRef<Path>) -> ArcResult<()> {
+pub fn decode_file(data: &[u8], output_path: impl AsRef<Path>) -> ArcResult<()> {
     // BSE wraps the inner file.  Only the 0x40-byte header at offsets 0x10..0x4F
     // is encrypted; the body (from 0x50) is plaintext.
     // After stripping the 0x10-byte BSE metadata, the inner payload is:
     //   decrypted_header (0x40 bytes) + body (rest)
-    let bse_data = if bse::is_bse(data, file_size) {
+    let bse_data = if bse::is_bse(data) {
         debug!("BSE...");
         let mut payload = data.to_vec();
         bse::decrypt_bse(&mut payload)?;
@@ -42,21 +44,21 @@ pub fn decode_file(data: &[u8], file_size: u32, output_path: impl AsRef<Path>) -
         data.to_vec()
     };
 
-    if dsc::is_dsc(&bse_data, file_size) {
+    if dsc::is_dsc(&bse_data) {
         debug!("DSC...");
-        let (decrypted, size) = dsc::decrypt_dsc(&bse_data, file_size)?;
+        let (decrypted, size) = dsc::decrypt_dsc(&bse_data)?;
         dsc::save(&decrypted, size, output_path)?;
-    } else if cbg::is_cbg(&bse_data, file_size) {
+    } else if cbg::is_cbg(&bse_data) {
         debug!("CBG...");
         let (decrypted, w, h) = cbg::decrypt_cbg(&bse_data)?;
         cbg::save(&decrypted, w, h, output_path)?;
-    } else if bgi::is_bgi(&bse_data, file_size) {
+    } else if bgi::is_bgi(&bse_data) {
         debug!("BGI...");
         let (decrypted, w, h) = bgi::decrypt_bgi(&bse_data)?;
         bgi::save(&decrypted, w, h, output_path)?;
     } else if ogg::is_bgi_ogg(&bse_data) {
         debug!("OGG...");
-        let header_removed = ogg::remove_header(bse_data);
+        let header_removed = ogg::remove_header(&bse_data);
         ogg::save(&header_removed, output_path)?;
     } else {
         debug!("uncompressed...");
@@ -82,29 +84,26 @@ pub fn unpack_arc(
         fs::create_dir_all(out_dir)?;
     }
 
-    info!("File count: {}", count);
+    info!("File count: {count}");
 
-    let file_infos: Vec<(String, Vec<u8>, u32)> = (0..count)
+    let file_infos: Vec<(String, Vec<u8>)> = (0..count)
         .filter_map(|i| {
             let file_name = arc.get_file_name(i).ok()?;
             let raw_data = arc.get_file_data(i).ok()?;
-            let filesize = arc.get_file_size(i).ok()?;
-            Some((file_name.to_string(), raw_data, filesize))
+            Some((file_name.to_string(), raw_data))
         })
         .collect();
 
     let results = Mutex::new(Vec::with_capacity(count as usize));
-    file_infos
-        .par_iter()
-        .for_each(|(file_name, raw_data, filesize)| {
-            info!("Extracting {}", file_name);
-            let savepath = out_dir.join(file_name);
-            let result = decode_file(raw_data, *filesize, &savepath);
-            if result.is_err() {
-                error!("Failed to process file {}: {:?}", file_name, result);
-            }
-            results.lock().unwrap().push((file_name.clone(), result));
-        });
+    file_infos.par_iter().for_each(|(file_name, raw_data)| {
+        info!("Extracting {file_name}");
+        let savepath = out_dir.join(file_name);
+        let result = decode_file(raw_data, &savepath);
+        if result.is_err() {
+            error!("Failed to process file {file_name}: {result:?}");
+        }
+        results.lock().unwrap().push((file_name.clone(), result));
+    });
 
     Ok(results.into_inner().unwrap())
 }
@@ -116,7 +115,7 @@ pub fn unpack_arc(
 pub fn pack_arc(
     input_dir: impl AsRef<Path>,
     output_file: impl AsRef<Path>,
-    version: u8,
+    version: ArcVersion,
 ) -> ArcResult<()> {
     let mut files: Vec<(String, Vec<u8>)> = Vec::new();
 
@@ -142,7 +141,7 @@ pub fn pack_arc(
 
         // Only OGG files are supported for packing
         if ogg::is_ogg(&data) {
-            data = ogg::add_header(data);
+            data = ogg::add_header(&data);
         } else {
             error!("Unsupported file type: {}", path.display());
             return Err(ArcError::UnsupportedFileType(path.display().to_string()));
@@ -154,14 +153,8 @@ pub fn pack_arc(
     // Write ARC archive
     let mut arc_file = fs::File::create(output_file.as_ref())?;
 
-    let (magic, _metadata_size) = match version {
-        1 => (V1_MAGIC, V1_METADATA_SIZE),
-        2 => (V2_MAGIC, V2_METADATA_SIZE),
-        _ => unreachable!("No such version"),
-    };
-
     // Write header: magic (12 bytes) + file count (4 bytes)
-    arc_file.write_all(magic)?;
+    arc_file.write_all(version.magic())?;
     arc_file.write_all(&(files.len() as u32).to_le_bytes())?;
 
     let mut current_offset = 0u32;
@@ -169,18 +162,17 @@ pub fn pack_arc(
     // Write per-file metadata entries.
     // V1: [16-byte name][4 offset][4 size][8 padding] = 32 bytes
     // V2: [96-byte name][4 offset][4 size][24 padding] = 128 bytes
+    let name_len_limit = version.name_len();
+    let padding = version.metadata_size() as usize - 8 - name_len_limit;
+
     for (file_name, data) in &files {
-        write_filename(&mut arc_file, file_name, version)?;
+        write_filename(&mut arc_file, file_name, name_len_limit)?;
 
         arc_file.write_all(&current_offset.to_le_bytes())?;
         arc_file.write_all(&(data.len() as u32).to_le_bytes())?;
 
         // Version-specific trailing padding
-        arc_file.write_all(match version {
-            1 => &[0u8; 8],
-            2 => &[0u8; 24],
-            _ => unreachable!("invalid version"),
-        })?;
+        arc_file.write_all(&vec![0u8; padding])?;
 
         current_offset += data.len() as u32;
     }
@@ -194,12 +186,11 @@ pub fn pack_arc(
 }
 
 /// Write a null-padded filename into an ARC metadata entry.
-fn write_filename(arc_file: &mut impl Write, file_name: &str, version: u8) -> std::io::Result<()> {
-    let name_len_limit = if version == 1 {
-        V1_NAME_LEN
-    } else {
-        V2_NAME_LEN
-    };
+fn write_filename(
+    arc_file: &mut impl Write,
+    file_name: &str,
+    name_len_limit: usize,
+) -> std::io::Result<()> {
     let mut name_bytes = vec![0u8; name_len_limit];
     let copy_len = file_name.len().min(name_len_limit);
     name_bytes[..copy_len].copy_from_slice(&file_name.as_bytes()[..copy_len]);

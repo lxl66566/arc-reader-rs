@@ -1,7 +1,7 @@
 //! BGI uncompressed image format decoder.
 //!
-//! Ported from GARBro's ImageBGI.cs. Supports both plain and scrambled
-//! (RestorePixels snake-delta) modes.
+//! Ported from `GARBro`'s ImageBGI.cs. Supports both plain and scrambled
+//! (`RestorePixels` snake-delta) modes.
 
 use std::path::Path;
 
@@ -15,28 +15,29 @@ use crate::{error::ArcResult, write::write_rgba_to_png};
 // ---------------------------------------------------------------------------
 
 /// Check whether `data` looks like a valid BGI uncompressed image.
-pub fn is_bgi(data: &[u8], size: u32) -> bool {
-    if size < 0x10 || data.len() < 0x10 {
+#[must_use]
+pub fn is_bgi(data: &[u8]) -> bool {
+    if data.len() < 0x10 {
         return false;
     }
 
     let mut ptr = data;
-    let width = ptr.get_u16_le() as i32;
+    let width = i32::from(ptr.get_u16_le());
     if width <= 0 || width > 8096 {
         return false;
     }
 
-    let height = ptr.get_u16_le() as i32;
+    let height = i32::from(ptr.get_u16_le());
     if height <= 0 || height > 8096 {
         return false;
     }
 
-    let bpp = ptr.get_u16_le() as i32;
+    let bpp = i32::from(ptr.get_u16_le());
     if bpp != 8 && bpp != 24 && bpp != 32 {
         return false;
     }
 
-    let flag = ptr.get_u16_le() as i32;
+    let flag = i32::from(ptr.get_u16_le());
     if flag != 0 && flag != 1 {
         return false;
     }
@@ -50,8 +51,8 @@ pub fn decrypt_bgi(data: &[u8]) -> ArcResult<(Vec<u8>, u16, u16)> {
     let mut ptr = data;
     let width = ptr.get_u16_le();
     let height = ptr.get_u16_le();
-    let bpp = ptr.get_u16_le() as u32;
-    let flag = ptr.get_u16_le() as u32;
+    let bpp = u32::from(ptr.get_u16_le());
+    let flag = u32::from(ptr.get_u16_le());
 
     let pixel_size = (bpp / 8) as usize;
     let stride = width as usize * pixel_size;

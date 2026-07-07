@@ -1,18 +1,15 @@
-//! BSE (BuriKo Stream Encryption) decryption.
+//! BSE (`BuriKo` Stream Encryption) decryption.
 //!
-//! Supports BSE 1.0 and BSE 1.1, matching GARBro's ArcBGI.cs implementation.
+//! Supports BSE 1.0 and BSE 1.1, matching `GARBro`'s ArcBGI.cs implementation.
 
 use smallvec::SmallVec;
 
 use crate::error::{ArcError, ArcResult};
 
 /// Check whether the data starts with a valid BSE 1.x signature.
-pub fn is_bse(data: &[u8], size: u32) -> bool {
-    if size < 0x50 {
-        return false;
-    }
-
-    &data[0..6] == b"BSE 1."
+#[must_use]
+pub fn is_bse(data: &[u8]) -> bool {
+    data.len() >= 0x50 && &data[0..6] == b"BSE 1."
 }
 
 /// Decrypt the BSE header in place (first 64 bytes of the payload).
@@ -49,7 +46,7 @@ pub fn decrypt_bse(data: &mut [u8]) -> ArcResult<()> {
 
         let shift = (bse_next_key(&mut hash, version) & 7) as u32;
         let right_shift = (bse_next_key(&mut hash, version) & 1) == 0;
-        let symbol = (data[0x10 + dst] as i32).wrapping_sub(bse_next_key(&mut hash, version));
+        let symbol = i32::from(data[0x10 + dst]).wrapping_sub(bse_next_key(&mut hash, version));
 
         data[0x10 + dst] = if right_shift {
             rot_byte_r(symbol as u8, shift)
@@ -84,7 +81,7 @@ fn bse_next_key(seed: &mut i32, version: u16) -> i32 {
     }
 }
 
-/// BSE 1.0 random number generator (BseGenerator100 in GARBro).
+/// BSE 1.0 random number generator (`BseGenerator100` in `GARBro`).
 fn bse_rand_100(seed: &mut i32) -> i32 {
     let s = *seed;
     let tmp = ((s.wrapping_mul(257) >> 8)
@@ -95,13 +92,13 @@ fn bse_rand_100(seed: &mut i32) -> i32 {
     *seed
 }
 
-/// BSE 1.1 random number generator (BseGenerator101 in GARBro).
+/// BSE 1.1 random number generator (`BseGenerator101` in `GARBro`).
 fn bse_rand_101(seed: &mut i32) -> i32 {
     let s = *seed;
     let tmp = ((s.wrapping_mul(127) >> 7)
         .wrapping_add(s.wrapping_mul(83))
         .wrapping_add(53))
-        ^ (-1187621284i32); // 0xB97A7E5C as i32
+        ^ (-1187621284_i32); // 0xB97A7E5C as i32
     *seed = tmp.rotate_left(16);
     *seed
 }

@@ -17,7 +17,7 @@ pub fn write_rgba_to_png(
 
     let w = BufWriter::new(file);
 
-    let mut encoder = png::Encoder::new(w, width as u32, height as u32);
+    let mut encoder = png::Encoder::new(w, u32::from(width), u32::from(height));
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
 

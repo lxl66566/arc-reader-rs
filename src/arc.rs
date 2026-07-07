@@ -8,17 +8,57 @@ use log::info;
 
 use crate::error::{ArcError, ArcResult};
 
-// Version-specific constants
-pub const V1_MAGIC: &[u8] = b"PackFile    ";
-pub const V2_MAGIC: &[u8] = b"BURIKO ARC20";
+/// ARC archive format version.
+///
+/// V1 is the legacy `PackFile    ` format; V2 is the newer `BURIKO ARC20`
+/// format. Each variant knows its own magic, per-entry metadata size and
+/// filename field width.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArcVersion {
+    V1,
+    V2,
+}
 
-// V1 entry: 16 (name) + 4 (offset) + 4 (size) + 8 (padding) = 32 bytes
-pub const V1_METADATA_SIZE: u32 = 32;
-// V2 entry: 96 (name) + 4 (offset) + 4 (size) + 24 (padding) = 128 bytes (0x80)
-pub const V2_METADATA_SIZE: u32 = 128;
+impl ArcVersion {
+    /// Detect the version from a 12-byte magic signature.
+    fn from_magic(magic: &[u8]) -> Option<Self> {
+        match magic {
+            b"PackFile    " => Some(Self::V1),
+            b"BURIKO ARC20" => Some(Self::V2),
+            _ => None,
+        }
+    }
 
-pub const V1_NAME_LEN: usize = 16;
-pub const V2_NAME_LEN: usize = 96;
+    /// 12-byte magic signature used in the archive header.
+    #[must_use]
+    pub const fn magic(self) -> &'static [u8] {
+        match self {
+            Self::V1 => b"PackFile    ",
+            Self::V2 => b"BURIKO ARC20",
+        }
+    }
+
+    /// Per-entry metadata size in bytes.
+    ///
+    /// V1 entry: 16 (name) + 4 (offset) + 4 (size) + 8 (padding) = 32 bytes
+    /// V2 entry: 96 (name) + 4 (offset) + 4 (size) + 24 (padding) = 128 bytes
+    #[must_use]
+    pub const fn metadata_size(self) -> u32 {
+        match self {
+            Self::V1 => 32,
+            Self::V2 => 128,
+        }
+    }
+
+    /// Filename field width in bytes.
+    #[must_use]
+    pub const fn name_len(self) -> usize {
+        match self {
+            Self::V1 => 16,
+            Self::V2 => 96,
+        }
+    }
+}
 
 /// Represents a single file entry within an ARC archive.
 #[derive(Debug, Clone)]
@@ -33,7 +73,7 @@ pub struct Arc {
     file: File,
     data: u32,
     count: u32,
-    version: u8,
+    version: ArcVersion,
     files: Vec<ArcFile>,
 }
 
@@ -46,14 +86,8 @@ impl Arc {
         let mut magic_string = [0u8; 12];
         file.read_exact(&mut magic_string)?;
 
-        let version = if &magic_string == b"PackFile    " {
-            1
-        } else if &magic_string == b"BURIKO ARC20" {
-            2
-        } else {
-            return Err(ArcError::InvalidFormat);
-        };
-        info!("ARC version: {}", version);
+        let version = ArcVersion::from_magic(&magic_string).ok_or(ArcError::InvalidFormat)?;
+        info!("ARC version: {version:?}");
 
         // Read the number of file entries
         let mut buffer = [0u8; 4];
@@ -63,11 +97,7 @@ impl Arc {
         // Read all file metadata entries
         let mut files = Vec::with_capacity(number_of_files as usize);
         for _ in 0..number_of_files {
-            let file_info = if version == 1 {
-                Self::read_metadata_v1(&mut file)?
-            } else {
-                Self::read_metadata_v2(&mut file)?
-            };
+            let file_info = Self::read_metadata(&mut file, version)?;
             files.push(file_info);
         }
 
@@ -83,12 +113,14 @@ impl Arc {
     }
 
     /// Returns the total number of files in the archive.
+    #[must_use]
     pub fn files_count(&self) -> u32 {
         self.count
     }
 
-    /// Returns the ARC format version (1 or 2).
-    pub fn version(&self) -> u8 {
+    /// Returns the ARC format version.
+    #[must_use]
+    pub fn version(&self) -> ArcVersion {
         self.version
     }
 
@@ -104,7 +136,7 @@ impl Arc {
         let mut file_clone = self.file.try_clone()?;
 
         file_clone.seek(SeekFrom::Start(
-            (self.data as u64) + (file_info.offset as u64),
+            u64::from(self.data) + u64::from(file_info.offset),
         ))?;
 
         file_clone.read_exact(&mut data)?;
@@ -136,11 +168,11 @@ impl Arc {
         Ok(std::str::from_utf8(&name_bytes[..len])?)
     }
 
-    /// Read a V1 metadata entry (32 bytes per entry).
+    /// Read a metadata entry.
     ///
-    /// Layout: [16 name][4 offset][4 size][8 padding]
-    fn read_metadata_v1(file: &mut File) -> ArcResult<ArcFile> {
-        let mut name = vec![0u8; V1_NAME_LEN];
+    /// Layout: [name (`name_len`)][4 offset][4 size][trailing padding]
+    fn read_metadata(file: &mut File, version: ArcVersion) -> ArcResult<ArcFile> {
+        let mut name = vec![0u8; version.name_len()];
         file.read_exact(&mut name)?;
 
         sanitize_name(&mut name);
@@ -150,28 +182,9 @@ impl Arc {
         let offset = u32::from_le_bytes(buffer[0..4].try_into().unwrap());
         let size = u32::from_le_bytes(buffer[4..8].try_into().unwrap());
 
-        // Skip trailing padding
-        file.seek(SeekFrom::Current(8))?;
-
-        Ok(ArcFile { name, offset, size })
-    }
-
-    /// Read a V2 metadata entry (128 bytes per entry).
-    ///
-    /// Layout: [96 name][4 offset][4 size][24 padding]
-    fn read_metadata_v2(file: &mut File) -> ArcResult<ArcFile> {
-        let mut name = vec![0u8; V2_NAME_LEN];
-        file.read_exact(&mut name)?;
-
-        sanitize_name(&mut name);
-
-        let mut buffer = [0u8; 8];
-        file.read_exact(&mut buffer)?;
-        let offset = u32::from_le_bytes(buffer[0..4].try_into().unwrap());
-        let size = u32::from_le_bytes(buffer[4..8].try_into().unwrap());
-
-        // Skip trailing 24 bytes padding (0x68..0x80)
-        file.seek(SeekFrom::Current(24))?;
+        // Skip trailing padding (V1: 8 bytes, V2: 24 bytes)
+        let padding = i64::from(version.metadata_size()) - 8 - version.name_len() as i64;
+        file.seek(SeekFrom::Current(padding))?;
 
         Ok(ArcFile { name, offset, size })
     }

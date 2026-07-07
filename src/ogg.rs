@@ -9,7 +9,8 @@ use lewton::inside_ogg::OggStreamReader;
 use crate::error::ArcResult;
 
 /// Check whether this looks like a BGI-wrapped OGG/Vorbis file (bw header +
-/// OggS).
+/// `OggS`).
+#[must_use]
 pub fn is_bgi_ogg(data: &[u8]) -> bool {
     if data.len() < 8 {
         return false;
@@ -26,23 +27,26 @@ pub fn is_bgi_ogg(data: &[u8]) -> bool {
     &data[offset..offset + 4] == b"OggS"
 }
 
-/// 判断是否为 OGG 文件（不带有 headers）
+/// Check whether this looks like a plain (header-less) OGG/Vorbis file.
+#[must_use]
 pub fn is_ogg(data: &[u8]) -> bool {
-    &data[0..4] == b"OggS"
+    data.starts_with(b"OggS")
 }
 
-pub fn remove_header(data: Vec<u8>) -> Vec<u8> {
-    assert!(is_bgi_ogg(&data));
+#[must_use]
+pub fn remove_header(data: &[u8]) -> Vec<u8> {
+    assert!(is_bgi_ogg(data));
     // Read the Ogg data offset from the first 4 bytes (matches GARBro's AudioBGI)
     let offset = u32::from_le_bytes(data[0..4].try_into().unwrap()) as usize;
     data[offset..].to_vec()
 }
 
-pub fn add_header(data: Vec<u8>) -> Vec<u8> {
+#[must_use]
+pub fn add_header(data: &[u8]) -> Vec<u8> {
     let mut header = vec![
         0x40, 0x00, 0x00, 0x00, 0x62, 0x77, 0x20, 0x20, //
-        0x00, 0x00, 0x00, 0x00, // 文件大小占位符
-        0x00, 0x00, 0x00, 0x00, // 采样点数占位符
+        0x00, 0x00, 0x00, 0x00, // file size placeholder
+        0x00, 0x00, 0x00, 0x00, // sample count placeholder
         0x44, 0xAC, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, //
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, //
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, //
@@ -51,16 +55,16 @@ pub fn add_header(data: Vec<u8>) -> Vec<u8> {
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     ];
 
-    // 计算文件大小（原始数据长度 + header长度）
+    // Compute file size (raw data length + header length)
     header[8..12].copy_from_slice(&(data.len() as u32).to_le_bytes());
 
-    // 计算采样点数
-    let sample_count = calculate_sample_count(&data);
+    // Compute sample count
+    let sample_count = calculate_sample_count(data);
     header[12..16].copy_from_slice(&sample_count.to_le_bytes());
 
-    // 合并header和数据
+    // Concatenate header and data
     let mut result = header;
-    result.extend(data);
+    result.extend_from_slice(data);
     result
 }
 
@@ -71,6 +75,7 @@ pub fn save(data: &[u8], savepath: impl AsRef<Path>) -> ArcResult<()> {
     Ok(())
 }
 
+#[must_use]
 pub fn calculate_sample_count(ogg_data: &[u8]) -> u32 {
     // Use memory cursor to read OGG data
     let cursor = Cursor::new(ogg_data);
@@ -95,13 +100,13 @@ mod tests {
     #[test]
     fn test_headers() {
         let test_ogg_data = include_bytes!("../test_assets/test.ogg");
-        let test_ogg_data_with_header = add_header(test_ogg_data.to_vec());
+        let test_ogg_data_with_header = add_header(test_ogg_data);
         println!("{:02X?}", &test_ogg_data_with_header[..64]);
         assert_eq!(
             test_ogg_data_with_header[8..16],
             [0x07, 0x17, 0x00, 0x00, 0x40, 0x76, 0x00, 0x00]
         );
-        let test_ogg_data_without_header = remove_header(test_ogg_data_with_header);
+        let test_ogg_data_without_header = remove_header(&test_ogg_data_with_header);
         assert_eq!(test_ogg_data.as_ref(), test_ogg_data_without_header);
     }
 }

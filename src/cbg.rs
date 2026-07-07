@@ -1,7 +1,7 @@
-//! CompressedBG (CBG) image format decoder.
+//! `CompressedBG` (CBG) image format decoder.
 //!
 //! Supports both V1 (Huffman + delta prediction) and V2 (DCT + Huffman)
-//! decoding, ported from GARBro's ImageCBG.cs implementation.
+//! decoding, ported from `GARBro`'s ImageCBG.cs implementation.
 
 use std::{iter, path::Path};
 
@@ -21,12 +21,13 @@ type DctCoefficients = [[f32; 64]; 2];
 // Public API
 // ---------------------------------------------------------------------------
 
-/// Check whether `data` starts with the CompressedBG magic signature.
-pub fn is_cbg(data: &[u8], size: u32) -> bool {
-    size >= 0x30 && data.len() >= 15 && &data[0..15] == b"CompressedBG___"
+/// Check whether `data` starts with the `CompressedBG` magic signature.
+#[must_use]
+pub fn is_cbg(data: &[u8]) -> bool {
+    data.len() >= 0x30 && data.starts_with(b"CompressedBG___")
 }
 
-/// Decrypt a CompressedBG buffer, returning (RGBA pixels, width, height).
+/// Decrypt a `CompressedBG` buffer, returning (RGBA pixels, width, height).
 pub fn decrypt_cbg(crypted: &[u8]) -> ArcResult<(Vec<u8>, u16, u16)> {
     let mut ptr = &crypted[16..];
 
@@ -102,7 +103,7 @@ fn decrypt_v1(
     // --- Step 3: Huffman-decompress into intermediate buffer ---
     let mut intermediate = vec![0u8; intermediate_length as usize];
     let mut bits = MsbBitStream::new(ptr);
-    for dst in intermediate.iter_mut() {
+    for dst in &mut intermediate {
         *dst = tree.decode(&mut bits) as u8;
     }
 
@@ -183,7 +184,7 @@ fn unpack_zeros(input: &[u8], output: &mut [u8]) {
 }
 
 /// Reverse the average-prediction encoding, channel by channel.
-/// Ported from GARBro's ReverseAverageSampling.
+/// Ported from `GARBro`'s `ReverseAverageSampling`.
 fn reverse_average_sampling(output: &mut [u8], width: usize, height: usize, pixel_size: usize) {
     let stride = width * pixel_size;
     for y in 0..height {
@@ -193,10 +194,10 @@ fn reverse_average_sampling(output: &mut [u8], width: usize, height: usize, pixe
             for p in 0..pixel_size {
                 let mut avg: i32 = 0;
                 if x > 0 {
-                    avg += output[pixel + p - pixel_size] as i32;
+                    avg += i32::from(output[pixel + p - pixel_size]);
                 }
                 if y > 0 {
-                    avg += output[pixel + p - stride] as i32;
+                    avg += i32::from(output[pixel + p - stride]);
                 }
                 if x > 0 && y > 0 {
                     avg /= 2;
@@ -281,7 +282,7 @@ fn decrypt_v2(
     // Build the DCT scaling table
     let mut dct = [[0.0f32; 64]; 2];
     for i in 0..0x80 {
-        dct[i >> 6][i & 0x3F] = dct_raw[i] as f32 * DCT_TABLE[i & 0x3F];
+        dct[i >> 6][i & 0x3F] = f32::from(dct_raw[i]) * DCT_TABLE[i & 0x3F];
     }
 
     // --- Step 2: Record base_offset BEFORE reading weight tables (matches GARBro)
@@ -497,9 +498,9 @@ fn decode_rgb(
 
         #[allow(clippy::needless_range_loop)]
         for j in 0..64 {
-            let cy = ycbr_block[j][0] as f32;
-            let cb = ycbr_block[j][1] as f32;
-            let cr = ycbr_block[j][2] as f32;
+            let cy = f32::from(ycbr_block[j][0]);
+            let cb = f32::from(ycbr_block[j][1]);
+            let cr = f32::from(ycbr_block[j][2]);
 
             let r = cy + 1.402 * cr - 178.956;
             let g = cy - 0.34414 * cb - 0.71414 * cr + 135.95984;
@@ -521,7 +522,7 @@ fn decode_rgb(
 }
 
 /// Decode grayscale blocks (8 bpp): 1-channel DCT, direct output.
-/// Ported from GARBro's DecodeGrayscale. Uses the same DecodeDCT as RGB
+/// Ported from `GARBro`'s `DecodeGrayscale`. Uses the same `DecodeDCT` as RGB
 /// mode but only channel 0, and outputs raw byte values (no YCbCr->RGB).
 fn decode_grayscale(
     color_data: &[i16],
@@ -558,7 +559,7 @@ fn decode_grayscale(
     }
 }
 
-/// 8x8 Inverse DCT, matching GARBro's DecodeDCT.
+/// 8x8 Inverse DCT, matching `GARBro`'s `DecodeDCT`.
 #[allow(
     clippy::excessive_precision,
     clippy::approx_constant,
@@ -573,7 +574,7 @@ fn decode_dct(
     tmp: &mut [[f32; 8]; 8],
     ycbr_block: &mut [[i16; 3]; 64],
 ) {
-    let d = if channel > 0 { 1 } else { 0 };
+    let d = usize::from(channel > 0);
 
     for i in 0..8 {
         // Check if all AC coefficients for this column are zero
@@ -586,21 +587,21 @@ fn decode_dct(
             && data.get(src + 56 + i) == Some(&0);
 
         if all_zero {
-            let t = data.get(src + i).copied().unwrap_or(0) as f32 * dct[d][i];
+            let t = f32::from(data.get(src + i).copied().unwrap_or(0)) * dct[d][i];
             for row in 0..8 {
                 tmp[row][i] = t;
             }
             continue;
         }
 
-        let v1 = data[src + i] as f32 * dct[d][i];
-        let v2 = data[src + 8 + i] as f32 * dct[d][8 + i];
-        let v3 = data[src + 16 + i] as f32 * dct[d][16 + i];
-        let v4 = data[src + 24 + i] as f32 * dct[d][24 + i];
-        let v5 = data[src + 32 + i] as f32 * dct[d][32 + i];
-        let v6 = data[src + 40 + i] as f32 * dct[d][40 + i];
-        let v7 = data[src + 48 + i] as f32 * dct[d][48 + i];
-        let v8 = data[src + 56 + i] as f32 * dct[d][56 + i];
+        let v1 = f32::from(data[src + i]) * dct[d][i];
+        let v2 = f32::from(data[src + 8 + i]) * dct[d][8 + i];
+        let v3 = f32::from(data[src + 16 + i]) * dct[d][16 + i];
+        let v4 = f32::from(data[src + 24 + i]) * dct[d][24 + i];
+        let v5 = f32::from(data[src + 32 + i]) * dct[d][32 + i];
+        let v6 = f32::from(data[src + 40 + i]) * dct[d][40 + i];
+        let v7 = f32::from(data[src + 48 + i]) * dct[d][48 + i];
+        let v8 = f32::from(data[src + 56 + i]) * dct[d][56 + i];
 
         let v10 = v1 + v5;
         let v11 = v1 - v5;
@@ -698,7 +699,7 @@ fn decode_alpha(data: &[u8], width: usize, _height: usize, output: &mut [u8]) ->
             if ptr.is_empty() {
                 break;
             }
-            ctl = ptr[0] as u32 | 0x100;
+            ctl = u32::from(ptr[0]) | 0x100;
             ptr = &ptr[1..];
         }
 
@@ -710,9 +711,9 @@ fn decode_alpha(data: &[u8], width: usize, _height: usize, output: &mut [u8]) ->
             let v = u16::from_le_bytes([ptr[0], ptr[1]]);
             ptr = &ptr[2..];
 
-            let x = (v & 0x3F) as i32;
+            let x = i32::from(v & 0x3F);
             let x = if x > 0x1F { x | (!0x3F) } else { x };
-            let y = ((v >> 6) & 7) as i32;
+            let y = i32::from((v >> 6) & 7);
             let y = if y != 0 { y | (!7) } else { 0 };
             let count = (((v >> 9) & 0x7F) as usize) + 3;
 
@@ -926,7 +927,7 @@ impl BitStream for MsbBitStream<'_> {
             if self.pos >= self.data.len() {
                 return -1;
             }
-            self.cache = self.data[self.pos] as u32;
+            self.cache = u32::from(self.data[self.pos]);
             self.pos += 1;
             self.cache_size = 8;
         }
@@ -975,7 +976,7 @@ impl<'a> MsbBitStreamCursor<'a> {
         let mut shift = 0;
         loop {
             let byte = self.read_byte()?;
-            v |= ((byte & 0x7F) as u32) << shift;
+            v |= u32::from(byte & 0x7F) << shift;
             shift += 7;
             if byte & 0x80 == 0 {
                 return Some(v);
@@ -1003,7 +1004,7 @@ impl<'a> MsbBitStreamCursor<'a> {
 impl BitStream for MsbBitStreamCursor<'_> {
     fn get_next_bit(&mut self) -> i32 {
         if self.cache_size == 0 {
-            self.cache = self.read_byte().unwrap_or(0) as u32;
+            self.cache = u32::from(self.read_byte().unwrap_or(0));
             self.cache_size = 8;
         }
         let bit = ((self.cache >> 7) & 1) as i32;
@@ -1042,7 +1043,7 @@ fn read_variable(ptr: &mut &[u8]) -> u32 {
         }
         let c = ptr[0];
         *ptr = &ptr[1..];
-        v |= ((c & 0x7F) as u32) << shift;
+        v |= u32::from(c & 0x7F) << shift;
         shift += 7;
         if c & 0x80 == 0 {
             break;
@@ -1063,7 +1064,7 @@ fn read_variable_from_slice(data: &[u8], pos: &mut usize) -> Option<u32> {
         }
         let c = data[*pos];
         *pos += 1;
-        v |= ((c & 0x7F) as u32) << shift;
+        v |= u32::from(c & 0x7F) << shift;
         shift += 7;
         if c & 0x80 == 0 {
             return Some(v);

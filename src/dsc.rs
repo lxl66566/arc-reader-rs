@@ -4,7 +4,7 @@ use bytes::Buf;
 
 use crate::{decrypt::hash_update, error::ArcResult, write::write_rgba_to_png};
 
-/// DSC 节点结构体
+/// DSC Huffman tree node.
 #[derive(Debug, Clone)]
 struct NodeDSC {
     has_childs: u32,
@@ -22,18 +22,14 @@ impl NodeDSC {
     }
 }
 
-/// 检查数据是否是有效的 DSC 文件
-pub fn is_dsc(data: &[u8], size: u32) -> bool {
-    if size < 32 {
-        return false;
-    }
-
-    // 检查文件魔数
-    &data[0..15] == b"DSC FORMAT 1.00"
+/// Check whether the data starts with a valid DSC magic signature.
+#[must_use]
+pub fn is_dsc(data: &[u8]) -> bool {
+    data.len() >= 32 && &data[0..15] == b"DSC FORMAT 1.00"
 }
 
-/// 解密 DSC 文件，返回解密后的数据和大小
-pub fn decrypt_dsc(crypted: &[u8], crypted_size: u32) -> ArcResult<(Vec<u8>, u32)> {
+/// Decrypt a DSC buffer, returning the decoded data and its size.
+pub fn decrypt_dsc(crypted: &[u8]) -> ArcResult<(Vec<u8>, u32)> {
     let mut data_ptr = &crypted[16..];
 
     let mut hash = data_ptr.get_u32_le();
@@ -43,19 +39,19 @@ pub fn decrypt_dsc(crypted: &[u8], crypted_size: u32) -> ArcResult<(Vec<u8>, u32
 
     let mut nodes = vec![NodeDSC::new(); 1024];
 
-    // 构建缓冲区
+    // Build the weight buffer
     let mut buffer = Vec::with_capacity(512);
     for n in 0..512 {
         let v = crypted[n + 32].wrapping_sub((hash_update(&mut hash) & 0xFF) as u8);
         if v != 0 {
-            buffer.push(((v as u32) << 16) + n as u32);
+            buffer.push((u32::from(v) << 16) + n as u32);
         }
     }
 
-    // 对缓冲区排序
-    buffer.sort();
+    // Sort weights ascending
+    buffer.sort_unstable();
 
-    // 构建解压缩树
+    // Build the decompression tree
     let mut vector0 = vec![0u32; 1024];
     let mut nn = 0;
     let mut toggle = 0x200;
@@ -97,11 +93,11 @@ pub fn decrypt_dsc(crypted: &[u8], crypted_size: u32) -> ArcResult<(Vec<u8>, u32
         nn += 1;
     }
 
-    // 解压缩数据
+    // Decompress the payload
     let mut data = vec![0u8; size as usize];
     let src_ptr_start = 32 + 512;
 
-    let src_end = crypted_size - src_ptr_start;
+    let src_end = crypted.len() - src_ptr_start;
     let dst_end = size;
 
     let mut src_ptr = 0;
@@ -113,11 +109,11 @@ pub fn decrypt_dsc(crypted: &[u8], crypted_size: u32) -> ArcResult<(Vec<u8>, u32
     while src_ptr < src_end && dst_ptr < dst_end {
         let mut nentry = 0;
 
-        // 遍历树
+        // Walk the tree
         while nodes[nentry as usize].has_childs != 0 {
             if nbits == 0 {
                 nbits = 8;
-                bits = crypted[src_ptr_start as usize + src_ptr as usize] as u32;
+                bits = u32::from(crypted[src_ptr_start + src_ptr]);
                 src_ptr += 1;
             }
 
@@ -139,7 +135,7 @@ pub fn decrypt_dsc(crypted: &[u8], crypted_size: u32) -> ArcResult<(Vec<u8>, u32
                 let bytes = ((11 - nbits) >> 3) + 1;
                 let mut bytes_left = bytes;
                 while bytes_left > 0 {
-                    let next_byte = crypted[src_ptr_start as usize + src_ptr as usize] as u32;
+                    let next_byte = u32::from(crypted[src_ptr_start + src_ptr]);
                     cvalue = next_byte + (cvalue << 8);
                     src_ptr += 1;
                     nbits2 += 8;
@@ -152,7 +148,7 @@ pub fn decrypt_dsc(crypted: &[u8], crypted_size: u32) -> ArcResult<(Vec<u8>, u32
 
             let offset = (cvalue >> (nbits2 - 12)) + 2;
             let mut ring_ptr = dst_ptr - offset;
-            let mut count = (info & 0xFF) as u32 + 2;
+            let mut count = u32::from(info & 0xFF) + 2;
 
             while count > 0 {
                 let tmp = data[ring_ptr as usize];
@@ -171,7 +167,8 @@ pub fn decrypt_dsc(crypted: &[u8], crypted_size: u32) -> ArcResult<(Vec<u8>, u32
     Ok((data, size))
 }
 
-/// 检查数据是否是图像
+/// Check whether the decoded data looks like a BGI image header.
+#[must_use]
 pub fn is_image(data: &[u8]) -> bool {
     if data.len() < 16 {
         return false;
@@ -193,7 +190,7 @@ pub fn is_image(data: &[u8]) -> bool {
         return false;
     }
 
-    // 检查 11 个零字节
+    // The next 11 bytes must be zero
     for _ in 0..11 {
         if ptr.get_u8() != 0 {
             return false;
