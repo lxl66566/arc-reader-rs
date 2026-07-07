@@ -33,6 +33,9 @@ pub enum ArcError {
 
     #[error("Unsupported file type: {0}")]
     UnsupportedFileType(String),
+
+    #[error("invalid image format '{0}', expected 'bgi' or 'cbg'")]
+    InvalidImageFormat(String),
 }
 
 pub type ArcResult<T> = Result<T, ArcError>;

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use arc_reader::arc::ArcVersion;
+use arc_reader::{ImageFormat, arc::ArcVersion};
 use clap::{Parser, Subcommand};
 use log::{error, info};
 
@@ -36,6 +36,10 @@ enum Commands {
         /// ARC version
         #[arg(long, short, default_value = "2", value_parser = parse_version)]
         version: ArcVersion,
+
+        /// Image encoding format: "bgi" (default) or "cbg" (CompressedBG V1)
+        #[arg(long, short, default_value = "bgi", value_parser = |s: &str| ImageFormat::try_from(s))]
+        image: ImageFormat,
     },
 }
 
@@ -72,9 +76,10 @@ fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
             input_dir,
             output_file,
             version,
+            image,
         } => {
             let output = output_file.unwrap_or(input_dir.with_extension("arc"));
-            arc_reader::pack_arc(&input_dir, &output, version)?;
+            arc_reader::pack_arc(&input_dir, &output, version, image)?;
             info!("Packed to {}", output.display());
         }
     }
@@ -116,6 +121,7 @@ mod tests {
                 input_dir,
                 output_file: Some(temp_dir_path.join("test.arc")),
                 version: ArcVersion::V2,
+                image: ImageFormat::Bgi,
             },
         })
         .unwrap();

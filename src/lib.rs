@@ -11,7 +11,7 @@ pub mod write;
 
 pub(crate) mod decrypt;
 
-use std::{fs, io::Write, path::Path};
+use std::{fmt, fs, io::Write, path::Path};
 
 use log::{debug, error, info, warn};
 use rayon::prelude::*;
@@ -21,6 +21,37 @@ use crate::{
     error::{ArcError, ArcResult},
 };
 
+/// Image encoding format for packing PNG images into ARC archives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ImageFormat {
+    /// BGI uncompressed image format (default).
+    #[default]
+    Bgi,
+    /// `CompressedBG` V1 (Huffman + delta prediction) compressed format.
+    CbgV1,
+}
+
+impl fmt::Display for ImageFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Bgi => write!(f, "BGI"),
+            Self::CbgV1 => write!(f, "CBG V1"),
+        }
+    }
+}
+
+impl TryFrom<&str> for ImageFormat {
+    type Error = ArcError;
+
+    fn try_from(v: &str) -> Result<Self, Self::Error> {
+        match v.to_ascii_lowercase().as_str() {
+            "bgi" => Ok(Self::Bgi),
+            "cbg" | "cbgv1" | "cbg-v1" | "cbg1" => Ok(Self::CbgV1),
+            _ => Err(ArcError::InvalidImageFormat(v.to_owned())),
+        }
+    }
+}
+
 /// Check whether the data starts with a PNG magic signature.
 fn is_png(data: &[u8]) -> bool {
     data.starts_with(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
@@ -29,23 +60,40 @@ fn is_png(data: &[u8]) -> bool {
 /// Encode a single file for inclusion in an ARC archive.
 ///
 /// - **OGG** → BGI-wrapped audio (`bw  ` header)
-/// - **PNG** → CBG V1 compressed image, falling back to BGI uncompressed on the
-///   rare occasion that Huffman code lengths are pathological.
-fn encode_for_pack(data: &[u8]) -> ArcResult<Vec<u8>> {
+/// - **PNG** → image encoded with the given [`ImageFormat`]; CBG V1 falls back
+///   to BGI on the rare occasion that Huffman code lengths are pathological.
+fn encode_for_pack(data: &[u8], format: ImageFormat) -> ArcResult<Vec<u8>> {
     if ogg::is_ogg(data) {
         Ok(ogg::add_header(data))
     } else if is_png(data) {
         let img = write::read_png(data)?;
-        match cbg::encode_cbg_v1(&img.rgba, img.width, img.height, img.has_alpha) {
-            Ok(cbg_data) => Ok(cbg_data),
-            Err(e) => {
-                debug!("CBG V1 encode failed ({e:?}), falling back to BGI uncompressed");
-                Ok(bgi::encode_bgi(
-                    &img.rgba,
-                    img.width,
-                    img.height,
-                    img.has_alpha,
-                ))
+        debug!(
+            "PNG: {}x{}, {}, {} bytes → {format}",
+            img.width,
+            img.height,
+            if img.has_alpha { "32bpp" } else { "24bpp" },
+            data.len(),
+        );
+        match format {
+            ImageFormat::Bgi => Ok(bgi::encode_bgi(
+                &img.rgba,
+                img.width,
+                img.height,
+                img.has_alpha,
+            )),
+            ImageFormat::CbgV1 => {
+                match cbg::encode_cbg_v1(&img.rgba, img.width, img.height, img.has_alpha) {
+                    Ok(cbg_data) => Ok(cbg_data),
+                    Err(e) => {
+                        debug!("CBG V1 encode failed ({e:?}), falling back to BGI uncompressed");
+                        Ok(bgi::encode_bgi(
+                            &img.rgba,
+                            img.width,
+                            img.height,
+                            img.has_alpha,
+                        ))
+                    }
+                }
             }
         }
     } else {
@@ -159,13 +207,17 @@ pub fn unpack_arc(
 
 /// Pack files from a directory into an ARC archive (V1 or V2).
 ///
-/// Currently only OGG audio files are supported; each file's extension-less
-/// name is used as the ARC entry name, and a BGI audio header is prepended.
+/// Each file is encoded based on its type: OGG audio gets a BGI header,
+/// PNG images are encoded with the given [`ImageFormat`], and each file's
+/// extension-less name is used as the ARC entry name.
 pub fn pack_arc(
     input_dir: impl AsRef<Path>,
     output_file: impl AsRef<Path>,
     version: ArcVersion,
+    image_format: ImageFormat,
 ) -> ArcResult<()> {
+    info!("Image encoding format: {image_format}");
+
     let mut files: Vec<(String, Vec<u8>)> = Vec::new();
 
     for entry in fs::read_dir(input_dir.as_ref())? {
@@ -188,7 +240,7 @@ pub fn pack_arc(
 
         let mut data = fs::read(&path)?;
 
-        data = encode_for_pack(&data)?;
+        data = encode_for_pack(&data, image_format)?;
 
         files.push((file_name, data));
     }
@@ -259,11 +311,11 @@ mod tests {
 
     /// Full pipeline: PNG → encode_for_pack → decode_file → compare RGBA
     /// pixels.
-    fn assert_round_trip(rgba: &[u8], width: u16, height: u16, _has_alpha: bool) {
+    fn assert_round_trip(rgba: &[u8], width: u16, height: u16, format: ImageFormat) {
         let png_data = make_png(rgba, width as u32, height as u32);
         assert!(is_png(&png_data));
 
-        let encoded = encode_for_pack(&png_data).unwrap();
+        let encoded = encode_for_pack(&png_data, format).unwrap();
 
         // decode_file writes to disk; test the decoder directly instead.
         let tmp = tempfile::tempdir().unwrap();
@@ -291,12 +343,11 @@ mod tests {
                 ]
             })
             .collect();
-        assert_round_trip(&rgba, w, h, false);
+        assert_round_trip(&rgba, w, h, ImageFormat::CbgV1);
     }
 
     #[test]
     fn test_png_bgi_pipeline() {
-        // Force BGI path by encoding directly
         let (w, h) = (16u16, 12u16);
         let total = usize::from(w) * usize::from(h);
         let rgba: Vec<u8> = (0..total)
@@ -309,17 +360,7 @@ mod tests {
                 ]
             })
             .collect();
-
-        let encoded = bgi::encode_bgi(&rgba, w, h, false);
-        assert!(bgi::is_bgi(&encoded));
-
-        let tmp = tempfile::tempdir().unwrap();
-        let out = tmp.path().join("bgi_test.png");
-        decode_file(&encoded, &out).unwrap();
-
-        let decoded = std::fs::read(&out).unwrap();
-        let img = write::read_png(&decoded).unwrap();
-        assert_eq!(img.rgba, rgba);
+        assert_round_trip(&rgba, w, h, ImageFormat::Bgi);
     }
 
     #[test]
@@ -348,7 +389,7 @@ mod tests {
 
         // Pack
         let arc_path = base.join("test.arc");
-        pack_arc(&input_dir, &arc_path, ArcVersion::V2).unwrap();
+        pack_arc(&input_dir, &arc_path, ArcVersion::V2, ImageFormat::Bgi).unwrap();
 
         // Unpack
         let output_dir = base.join("output");
