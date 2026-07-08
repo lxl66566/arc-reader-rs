@@ -19,9 +19,15 @@ Pack/unpack .arc files (V1 and V2 arc versions supported), supports images + aud
 - Image encoding (from PNG): BGI uncompressed (default) / CBG V1
 - Audio unpack/pack: `.ogg` Vorbis files (with BGI audio header)
 
-## Usage
+## Download
 
-Please download the precompiled command-line binary from [Release](https://github.com/lxl66566/arc-reader-rs/releases/).
+Choose one of the following:
+
+- Download the precompiled command-line binary from [Release](https://github.com/lxl66566/arc-reader-rs/releases/).
+- Install via [cargo-binstall](https://github.com/cargo-bins/cargo-binstall): `cargo binstall arc-reader -y`
+- Install via [bpm](https://github.com/lxl66566/bpm-rs): `bpm i https://github.com/lxl66566/arc-reader-rs`
+
+## Usage
 
 ```sh
 arc-reader unpack <ARC_FILE> [OUTPUT_PATH]
@@ -38,10 +44,12 @@ Run `arc-reader -h` for detailed information.
 | Game | Ver | Img Fmt | Img Dec | Img Enc | Aud Dec | Aud Enc |
 | --- | --- | --- | --- | --- | --- | --- |
 | 千の刃涛、桃花染の皇姫 | v0.2.x | - | - | - | ✓ | ✓ |
-| ジュエリー・ハーツ・アカデミア -We will wing wonder world- | v0.3.0 | - | ✓ | - | ✓ | ✓ |
+| ジュエリー・ハーツ・アカデミア -We will wing wonder world- | v0.4.0 | CBG V2 | ✓ | ✓ [^1] | ✓ | ✓ |
 | 大図書館の羊飼い | v0.2.x | - | - | - | ✓ | ✓ |
 | 大図書館の羊飼い -Dreaming Sheep- | v0.4.0 | CBG V1 | ✓ | ✓ | ✓ | ✓ |
-| 素晴らしき日々15th | v0.3.0 | - | ✓ | - | ✓ | - |
+| 素晴らしき日々15th | v0.4.0 | CBG V2 | ✓ | - | ✓ | - |
+
+[^1]: Packing with CBG V1 format allows the game engine to read and play normally.
 
 ## Thanks
 
